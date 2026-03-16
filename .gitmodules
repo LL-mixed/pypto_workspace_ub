@@ -1,0 +1,21 @@
+[submodule "simpler"]
+	path = modules/simpler
+	url = https://github.com/ChaoWao/simpler.git
+[submodule "pypto"]
+	path = modules/pypto
+	url = https://github.com/hw-native-sys/pypto.git
+[submodule "PTOAS"]
+	path = modules/PTOAS
+	url = https://github.com/zhangstevenunity/PTOAS.git
+[submodule "pypto-serving"]
+	path = modules/pypto-serving
+	url = https://github.com/hengliao1972/pypto-serving.git
+[submodule "pypto-lib"]
+	path = modules/pypto-lib
+	url = https://github.com/hengliao1972/pypto-lib.git
+[submodule "pypto_top_level_design_documents"]
+	path = docs/pypto_top_level_design_documents
+	url = https://github.com/hengliao1972/pypto_top_level_design_documents.git
+[submodule "pto-isa"]
+	path = modules/pto-isa
+	url = https://github.com/PTO-ISA/pto-isa.git
