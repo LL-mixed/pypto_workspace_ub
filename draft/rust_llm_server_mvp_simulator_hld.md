@@ -1493,27 +1493,227 @@ simulator/
 
 ---
 
-## 16. 后续增强方向
+## 16. L5/L6、Gossip 与 Allocator HA 扩展设计
 
-后续，仿真系统可沿三个方向增强：
+当前正文已经把 `L5/L6`、gossip 和 allocator 主备切换当成保留位提出，但如果它们始终停留在路线图里，前面的 `L0-L7` 编号和控制面位置仍然是不完整的。因此，本节开始把这三个扩展点落成具体设计。
 
-### v1
+### 16.1 扩展目标
 
-- 加入 L5/L6
-- 加入最小 gossip 聚合
-- 加入 allocator 主备切换
+这一层扩展的目标不是把平台做成完整生产集群，而是补齐三个当前缺口：
 
-### v2
+- 让 `L5/L6` 不再只是“编号保留位”，而成为可观测、可调度、可故障注入的对象层
+- 让跨 `L4` 的拓扑、健康、容量和路由摘要能够传播，而不是完全依赖中心化静态配置
+- 让 allocator 不再是单点对象，而具备最小主备切换能力
 
-- 加入持久化 index 仿真
-- 加入 Bloom/delta gossip 成本模型
-- 加入更真实的容量碎片和恢复逻辑
+### 16.2 L5/L6 对象语义
 
-### v3
+在当前文档里，`L2-L4` 已经有较清晰的 `UBPU`、host 和 `UB domain` 映射。向上扩展时，建议采用以下对象语义：
 
-- 加入 layer-wise block 与 prefetch 仿真
-- 加入 compute-IO overlap 模型
-- 加入连续批处理和更真实的请求调度
+| Level | 建议对象 | 作用 |
+|---|---|---|
+| L5 | fabric cell | 聚合多个 `L4 UB domain` 的局部管理和资源汇总单元 |
+| L6 | federation domain | 聚合多个 `L5 fabric cell` 的跨域编排与容错单元 |
+| L7 | global coordinator | 顶层入口、策略下发和全局观察面 |
+
+其中：
+
+- `L5` 更偏向“同一大拓扑内的上层汇聚”
+- `L6` 更偏向“跨域联合和故障隔离”
+
+当前设计建议引入以下扩展对象：
+
+- `FabricCellId`
+- `FederationId`
+- `CellMembership`
+- `FederationMembership`
+- `CapacitySummary`
+- `RouteSummary`
+- `HealthSummary`
+
+并把 `TaskCoord` 从：
+
+`(logical_system, l6, l5, l4, l3, l2, scope_depth, task_id)`
+
+继续解释为真实可用的跨域路径坐标，而不是仅保留字段。
+
+### 16.3 L5/L6 拓扑与控制面
+
+在扩展后的控制面里，建议形成如下层次：
+
+1. `L4 domain controller`
+- 汇总本域内 host / `UBPU` / `Entity` 的容量、健康、路由可达性
+
+2. `L5 cell controller`
+- 聚合多个 `L4` 摘要
+- 做 cell 内部的路径选择、容量再分配和局部故障隔离
+
+3. `L6 federation controller`
+- 聚合多个 `L5` 摘要
+- 做跨 cell 的任务放置、回源路径选择和跨域降级
+
+在 QEMU 平台中，这三个控制器不必一开始都实现为独立进程，但在语义上应区分：
+
+- 本地状态
+- 聚合摘要
+- 上行传播
+- 下行决策
+
+### 16.4 最小 Gossip 聚合协议
+
+为避免 `L5/L6` 完全依赖强中心化轮询，建议引入最小 gossip 聚合协议。该协议不是为生产网络优化的最终协议，而是一个用于仿真和验证的状态传播模型。
+
+最小 gossip 消息建议包括：
+
+- `membership_digest`
+  - 节点/域成员、epoch、状态位
+- `capacity_digest`
+  - free blocks、watermark、导出/导入内存容量
+- `health_digest`
+  - degraded/failed/quarantined 摘要
+- `route_digest`
+  - 可达性、首选出口、备用路径数量
+- `allocator_digest`
+  - allocator leader、lease epoch、last applied index
+
+传播规则建议为：
+
+1. `L4 -> L5`
+- 周期性上报本域摘要
+
+2. `L5 -> L5`
+- 同层 anti-entropy，同步 cell 级视图
+
+3. `L5 -> L6`
+- 上报聚合后的 cell 摘要
+
+4. `L6 -> L5/L4`
+- 回传策略性决策，例如限流、降级、重路由或迁移建议
+
+最小一致性要求：
+
+- gossip 最终一致，不要求强一致
+- 每条摘要带 `epoch`
+- 新 epoch 覆盖旧 epoch
+- 明确允许短时间摘要过期，但必须可观测
+
+建议引入以下事件：
+
+- `MembershipDigestSent`
+- `MembershipDigestMerged`
+- `CapacityDigestUpdated`
+- `HealthDigestEscalated`
+- `RouteDigestApplied`
+- `GossipDigestExpired`
+
+### 16.5 Allocator 主备切换
+
+当前文档中的 allocator 还是单对象视角。向上扩展后，allocator 至少要具备：
+
+- leader / follower 角色区分
+- lease-based 主角色授予
+- 状态复制
+- 故障切换
+- 恢复后追赶
+
+建议的最小角色模型：
+
+| 角色 | 职责 |
+|---|---|
+| allocator leader | 接受分配请求、写入意图、发布结果 |
+| allocator follower | 跟随复制、提供热备 |
+| allocator observer | 只读观察，不参与提交 |
+
+最小状态机建议为：
+
+1. `Follower`
+- 接收 leader 状态更新
+
+2. `Candidate`
+- 在 lease 超时后尝试提升
+
+3. `Leader`
+- 持有有效 lease，负责分配
+
+4. `Recovering`
+- 故障恢复后追赶缺失日志
+
+最小复制数据建议包括：
+
+- `allocation_intent_log`
+- `watermark_state`
+- `ownership_map`
+- `lease_epoch`
+- `applied_index`
+
+切换规则建议为：
+
+- 只有持有最新 `lease_epoch` 的节点可成为 leader
+- 新 leader 在接管前必须完成最小状态追平
+- 旧 leader 恢复后必须先进入 `Recovering`
+- 任何双主都必须通过 fencing 事件暴露出来
+
+建议引入以下事件：
+
+- `AllocatorLeaseGranted`
+- `AllocatorLeaseExpired`
+- `AllocatorPromotionStarted`
+- `AllocatorPromotionCompleted`
+- `AllocatorFencingTriggered`
+- `AllocatorRecoveryStarted`
+- `AllocatorRecoveryCompleted`
+
+### 16.6 对现有模块的影响
+
+这三个扩展点会直接影响现有模块边界：
+
+- `Topology Builder`
+  - 需要从 `L4` 扩展到 `L6`
+- `Event Engine`
+  - 需要支持 gossip、lease、切换和恢复事件
+- `Metrics and Reporting Layer`
+  - 需要支持 cell/federation/allocator 级指标
+- `QEMU Integration Layer`
+  - 需要支持更多控制面协同服务，而不只是局部 domain
+
+建议新增的概念模块包括：
+
+- `cell_control`
+- `federation_control`
+- `gossip`
+- `allocator_ha`
+
+这些仍然是职责边界，不预设为具体文件名。
+
+### 16.7 新增指标与验收点
+
+建议新增以下指标：
+
+- `gossip_messages_total{type=...}`
+- `gossip_merge_latency_us`
+- `cell_membership_changes_total`
+- `federation_route_changes_total`
+- `allocator_role_changes_total`
+- `allocator_lease_epoch`
+- `allocator_failover_duration_us`
+- `allocator_fencing_total`
+
+建议新增以下验收点：
+
+- `L5/L6` 对象能在拓扑、trace 和配置中显式出现
+- gossip 摘要能够跨 `L4` 传播并收敛
+- allocator leader 故障后，follower 能在可配置时间内接管
+- 主备切换期间 allocation 语义可解释，且不会出现静默双主
+
+### 16.8 后续更远期增强
+
+在这三个扩展点落稳之后，再考虑更后面的增强方向：
+
+- 持久化 index 仿真
+- Bloom/delta gossip 成本模型
+- 更真实的容量碎片和恢复逻辑
+- layer-wise block 与 prefetch 仿真
+- compute-IO overlap 模型
+- 连续批处理和更真实的请求调度
 
 ---
 
