@@ -44,7 +44,7 @@
 
 如果当前设计只停留在 “KV cache simulator”，会遗漏 v8 的真正结构来源。
 
-同时，如果把 `Linqu` 直接写成一套脱离 `UB` 的自定义 hierarchy/runtime 规范，也会偏离你现在给出的规范基线。根据 `ub_docs` 下的 `UB` 文档，平台首先要尊重的是 `UBPU`、`Entity/EID`、`UB domain`、`UB Fabric`、`UMMU`、`UB Decoder`、`UBM`、`UB OS Component`、`UB Service Core` 这些系统对象和分层边界；PyPTO/Lingqu 语义是在此之上的运行时与编程模型，而不是替代它们。
+同时，如果把 `Linqu` 直接写成一套脱离 `UB` 的自定义 hierarchy/runtime 规范，也会偏离你现在给出的规范基线。根据 `ub_docs` 下的 `UB` 文档，平台首先要尊重的是 `UBPU`、`Entity/EID`、`UB domain`、`UB Fabric`、`UMMU`、`UB Decoder`、`UBM`、`UB OS Component`、`UB Service Core` 这些系统对象和分层边界；PyPTO/Lingqu 的 hierarchy、task、scope/ring 等只是建立在这些接口之上的编程与执行视图，不是平台本体的替代物。
 
 根据 `rust_llm_server_design_v8.md`、`linqu_runtime_design.md`、`machine_hierarchy_and_function_hierarchy.md`、`multi_level_runtime_ring_and_pypto_free_api.md` 和 `linqu_data_system.md`，这个仿真系统还必须满足四条上位约束：
 
@@ -112,7 +112,7 @@
 
 - guest 侧优先应模拟 `UBRT`/`ACPI`/`DTS` 启动入口和 `ubfi` 能看到的设备对象
 - guest-visible 设备模型优先应贴近 `ubus` / `ummu` / `ubcore` / `vfio-ub` 的对象边界
-- `UBM`、`UB Service Core`、PoD 级管理和更高层资源调度，在当前范围中更适合作为宿主侧控制面或 co-sim service
+- `UBM`、`UB` 管控面基础设施、PoD 级管理和更高层资源调度，是平台本体的一部分；在当前实现路线里，其中一部分更适合作为宿主侧控制面服务先行落地
 
 换句话说，当前范围不是直接去“模拟完整 SuperPoD 管理软件”，而是先把 Linux 能识别和使用的 `UB` 对象链路模拟对。
 
@@ -206,12 +206,12 @@
 
 ### 4.1 核心思想
 
-仿真系统以 QEMU 为底层系统仿真框架，在其上叠加 Linqu 语义层和 workload 验证层。
+仿真系统以 QEMU 为底层系统仿真框架，在其上扩展出 `UB/Linqu` 规范一致的设备、控制面、基础设施和 workload 验证能力。
 
 也就是说：
 
 - 用 QEMU 模拟机器、节点、CPU、内存域、虚拟设备和互连拓扑
-- 用 Linqu 语义层定义 hierarchy、task、scope/ring、dispatch 和 data services
+- 用 `UB/Linqu` 仿真核心定义规范接口、设备对象、控制面能力，以及 PyPTO 所依赖的 hierarchy、task、scope/ring、dispatch 和 data services
 - 用参数化模型补足当前范围中尚无真实硬件支持的设备特性
 - 用具体 workload 去验证 Linqu 平台语义是否能支撑上层系统
 
@@ -240,11 +240,13 @@
                                 |
                                 v
                 +-------------------------------+
-                | Linqu Runtime Semantics Layer |
+                | UB/Linqu Simulation Core      |
+                | - UB core interfaces          |
+                | - control plane + infra       |
                 | - hierarchy / TaskKey         |
                 | - scope/ring lifecycle        |
                 | - function dispatch           |
-                | - data service semantics      |
+                | - data service simulation     |
                 +---------------+---------------+
                                 |
                                 v
@@ -332,7 +334,7 @@
 当前范围中推荐采用 **QEMU 主循环 + 上层事件调度** 的组合方式：
 
 - QEMU 提供设备/中断/时钟推进底座
-- Linqu 语义层维护自己的高层事件和 trace
+- `UB/Linqu` 仿真核心维护自己的高层事件、控制面事件和 trace
 - 不需要在当前阶段追求硬件级精确时序
 
 ### 5.2 以 QEMU 为底座，而不是另起一套系统模拟框架
@@ -440,10 +442,10 @@
   - 若对齐当前 Linux 实现，优先走 `ubcore Segment + JFS/JFC completion` 路径
   - 验证 `(UBA, LBA)` 寻址、异步读写、producer/consumer completion 语义
 - `lingqu_dfs`
-  - 优先作为 host-side service，位于 `UB Service Core` 之上
+  - 优先作为平台控制面/基础设施侧服务，位于 `UB Service Core` 之上
   - 验证全局 namespace、路径访问、pread/pwrite、元数据/数据路径延迟模型
 - `lingqu_db`
-  - 优先作为 host-side service，必要时通过 RPC gateway 接入 guest
+  - 优先作为平台控制面/基础设施侧服务，必要时通过 RPC gateway 接入 guest
   - 验证 Redis-like KV/Hash 基本命令、pipeline/batch、pub/sub 基本通知语义
 
 也就是说，serving cache hierarchy 不是整个数据平面，但当前仿真器要能对这些数据平面服务给出最小可运行、可观测、可验证的模型。
@@ -499,11 +501,86 @@
 
 ---
 
-## 7. 模块设计
+## 7. UB 管控面与基础设施仿真
+
+符合 `UB/Linqu` spec 的仿真系统不能只有 guest-visible 设备和上层 workload；它还必须显式覆盖最小可用的管控面与基础设施仿真。
+
+### 7.1 管控面范围
+
+当前范围至少应仿真以下能力：
+
+- 拓扑发现与枚举
+- `CNA` / `EID` 分配与回收
+- 路由生成、下发与更新
+- 资源编排与容量摘要
+- 健康、告警、遥测和故障事件
+- 最小 northbound 管控接口
+
+### 7.2 与平台本体的关系
+
+这些能力不应被表述为“host-side helper”或“可选 co-sim 附件”，而应被视为平台本体的一部分。当前实现中，某些控制面逻辑可以先运行在宿主侧，但在设计语义上它们属于：
+
+- `UB/Linqu` 规范接口的一部分
+- `UB` 系统可用性的必要条件
+- Rust LLM MVP 只消费、不定义的平台能力
+
+### 7.3 最小控制面对象
+
+建议至少显式建模：
+
+- `TopologyManager`
+- `AddressManager`
+- `RouteManager`
+- `ResourceManager`
+- `HealthManager`
+- `TelemetryManager`
+
+它们分别负责：
+
+- `TopologyManager`
+  - 设备发现、域边界、链路状态、成员变化
+- `AddressManager`
+  - `CNA` / `EID` 生命周期
+- `RouteManager`
+  - 路由计算、下发、重路由
+- `ResourceManager`
+  - 容量摘要、借用/回收、资源视图
+- `HealthManager`
+  - degraded/failed/quarantined 状态和故障升级
+- `TelemetryManager`
+  - 指标、事件和 northbound 查询/推送
+
+### 7.4 最小 northbound 面
+
+当前范围不要求完整复制 `RESTCONF/NETCONF/SNMP/Telemetry` 协议，但应至少保留以下平台级查询/订阅能力：
+
+- 查询拓扑
+- 查询地址映射
+- 查询路由状态
+- 查询健康状态
+- 查询资源摘要
+- 订阅关键事件
+
+### 7.5 与 guest 和 workload 的边界
+
+guest 设备面、guest UAPI、control plane、workload 的关系应明确为：
+
+- guest 设备面
+  - 暴露 `UBC`、`Entity`、`Port`、`UMMU`、`URMA` 端点
+- guest UAPI
+  - 暴露 `/dev/ubcoreX`、ioctl、mmap、sysfs、netlink 的最小可见面
+- control plane
+  - 负责枚举、地址、路由、资源、健康和遥测
+- workload
+  - 消费上述平台能力，但不决定这些对象模型
+
+---
+
+## 8. 模块设计
 
 本章中的模块名默认表示**建议的职责边界**，不是仓库中已经存在的 Rust 文件名；是否最终落成单独 `.rs` 文件、子模块目录或 crate，留待实现阶段决定。
 
-### 7.1 Core Types
+### 8.1 Core Types
 
 定义仿真共享类型：
 
@@ -533,7 +610,7 @@
 - 能映射到 Linqu / PyPTO 的 hierarchy label 和 task key
 - 能覆盖 `(scope_level, task_id)` 到 `(logical_system, L7..L0, scope_depth, task_id)` 的演进
 
-### 7.2 QEMU Integration Layer
+### 8.2 QEMU Integration Layer
 
 这是新的底层基座模块。
 
@@ -542,7 +619,7 @@
 - 定义 QEMU machine / board / device 的抽象映射
 - 生成虚拟 host、chip、memory region、bus/fabric
 - 挂载 Lingqu 数据服务所需的虚拟设备或 host service 入口
-- 为上层 Linqu runtime semantics 暴露稳定的平台接口
+- 为上层 `UB/Linqu` 规范接口和 PyPTO 编程视图暴露稳定的平台接口
 
 当前范围中不要求完整修改 QEMU 主线代码，但 HLD 上要明确以下三类接入点：
 
@@ -550,7 +627,7 @@
 - QEMU device model
 - QEMU 外部协同服务接口
 
-### 7.3 Topology Builder
+### 8.3 Topology Builder
 
 负责根据配置构建逻辑拓扑：
 
@@ -572,7 +649,7 @@
 - 支持 active / collapsed / stubbed level
 - 拓扑树不仅服务缓存路由，也服务 dispatch trace
 
-### 7.4 Hierarchy Layer
+### 8.4 Hierarchy Layer
 
 这是仿真核心，提供生产 trait 的仿真实现：
 
@@ -596,7 +673,7 @@
 - serving hierarchy：`BlockStore` / `LevelNode` / `LevelAllocator`
 - runtime hierarchy：function label、task coordinate、scope 和 dispatch 边界
 
-### 7.5 Routing Layer
+### 8.5 Routing Layer
 
 实现两套路由器：
 
@@ -612,7 +689,7 @@
 - 记录 route reason
 - 记录 route path 与 level path 的映射关系
 
-### 7.6 Cache Lifecycle Layer
+### 8.6 Cache Lifecycle Layer
 
 负责 block 生命周期管理：
 
@@ -634,7 +711,7 @@
 
 当前范围里 task lifecycle 可以简化，但不能缺失。
 
-### 7.7 Program Model Layer
+### 8.7 Program Model Layer
 
 职责：
 
@@ -646,7 +723,7 @@
 
 当前范围不做真实 PyPTO 编译，只做层级标签与 dispatch 语义建模。
 
-### 7.8 Ring Lifecycle Layer
+### 8.8 Ring Lifecycle Layer
 
 职责：
 
@@ -660,7 +737,7 @@
 - 当前范围可以是逻辑模型，不必实现真实 lock-free ring
 - 但语义必须与 `multi_level_runtime_ring_and_pypto_free_api.md` 对齐
 
-### 7.9 Backend Adapter Layer
+### 8.9 Backend Adapter Layer
 
 职责：
 
@@ -670,7 +747,7 @@
 
 当前范围不执行真实设备逻辑，但必须能在 trace 中表现出这个边界。
 
-### 7.10 Guest UAPI Layer
+### 8.10 Guest UAPI Layer
 
 职责：
 
@@ -701,7 +778,7 @@
 - 失败模型
 - 可验证的 trace / metrics
 
-### 7.11 Data Service Layer
+### 8.11 Data Service Layer
 
 职责：
 
@@ -741,7 +818,7 @@
   - batched pipeline
 - `PUBLISH/SUBSCRIBE` 最小通知模型
 
-### 7.12 Workload Target Layer
+### 8.12 Workload Target Layer
 
 职责：
 
@@ -754,7 +831,7 @@
 - Linqu simulator 是平台
 - LLM server MVP 是 workload target，不是平台本身
 
-### 7.13 Event Engine
+### 8.13 Event Engine
 
 负责事件驱动执行：
 
@@ -785,7 +862,7 @@
 - 因果链追踪
 - 固定随机种子重放
 
-### 7.14 Workload Generator
+### 8.14 Workload Generator
 
 用于生成请求流。当前范围只需要支持三类 workload：
 
@@ -807,7 +884,7 @@ workload 输入应支持两类来源：
 - serving-native 访问流
 - PyPTO-shaped hierarchy-labeled trace
 
-### 7.15 Fault Injection Layer
+### 8.15 Fault Injection Layer
 
 用于故障注入：
 
@@ -825,7 +902,7 @@ workload 输入应支持两类来源：
 
 故障必须是可配置、可重放、可统计的。
 
-### 7.16 Metrics and Reporting Layer
+### 8.16 Metrics and Reporting Layer
 
 输出统一指标：
 
@@ -855,7 +932,7 @@ workload 输入应支持两类来源：
 - 时间序列采样
 - 每事件 trace
 
-### 7.17 CLI and Runner Surface
+### 8.17 CLI and Runner Surface
 
 提供最小命令行接口：
 
@@ -867,9 +944,9 @@ sim-run --scenario scenarios/failover.yaml --compare flat,recursive
 
 ---
 
-## 8. 执行模型
+## 9. 执行模型
 
-### 8.1 仿真时钟
+### 9.1 仿真时钟
 
 系统维护一个逻辑时钟 `now`。
 
@@ -884,10 +961,10 @@ sim-run --scenario scenarios/failover.yaml --compare flat,recursive
 对 QEMU-based 方案，建议理解为：
 
 - QEMU 提供底层时间推进和设备事件源
-- Linqu semantic layer 在其上维护高层 runtime 事件
+- `UB/Linqu` 仿真核心在其上维护高层运行时事件、控制面事件和数据服务事件
 - 当前范围可以通过宿主调度器把两者桥接，而不必一开始就深度侵入 QEMU 内核
 
-### 8.2 双重执行视图
+### 9.2 双重执行视图
 
 当前执行模型应同时覆盖两条路径：
 
@@ -896,14 +973,14 @@ sim-run --scenario scenarios/failover.yaml --compare flat,recursive
 - block 在哪一层命中
 - 是否发生 promotion / eviction / fallback
 
-2. runtime path
+2. programming/runtime view
 - 请求带什么 function label
 - 运行在哪个 `pl.Level`
 - 是否经过 host runtime 到 chip backend 的 dispatch
 - scope 何时 enter / exit
 - ring layer 如何分配与 retire
 
-### 8.3 请求处理主流程
+### 9.3 请求处理主流程
 
 对一个请求，当前仿真系统的标准流程如下：
 
@@ -923,7 +1000,7 @@ sim-run --scenario scenarios/failover.yaml --compare flat,recursive
 0. 解析或生成 `FunctionLabel` / `TaskCoord`
 11. 完成 task lifecycle 收尾和 trace 归档
 
-### 8.4 scope / ring 生命周期
+### 9.4 scope / ring 生命周期
 
 当前范围需要显式模拟下列运行时行为：
 
@@ -949,7 +1026,7 @@ sim-run --scenario scenarios/failover.yaml --compare flat,recursive
 - 条件为 scope token 已应用且 `ref_count == fanout_count`
 - retire 是 layer-local，不应依赖外层 ring head 先前进
 
-### 8.5 与 `simpler` 的边界流
+### 9.5 与 `simpler` 的边界流
 
 当一个请求需要进入 chip backend 边界时，仿真器执行：
 
@@ -973,7 +1050,7 @@ sim-run --scenario scenarios/failover.yaml --compare flat,recursive
 - `ubus` 可枚举的 `Entity` / `Port` / `Decoder`
 - `ubcore` / `uburma` 可绑定的通信端点
 
-### 8.6 与 Lingqu Data System 的关系
+### 9.6 与 Lingqu Data System 的关系
 
 在更完整的 Lingqu 体系中，runtime 会通过以下服务与数据平面交互：
 
@@ -999,8 +1076,8 @@ sim-run --scenario scenarios/failover.yaml --compare flat,recursive
 
 - QEMU 设备模型
   - 适合 `UBPU` endpoint、`Entity` resource space、`UMMU`/`UB Decoder` 最小边界、block / shmem / doorbell / completion
-- host-side 协同服务
-  - 适合 `UBM`、`UB Service Core` 外壳、dfs / db 这类高层服务，再通过虚拟设备或 RPC gateway 接到客体
+- 宿主侧控制面与基础设施服务
+  - 适合 `UBM`、`UB` 管控面基础设施、`UB Service Core` 外壳、dfs / db 这类平台能力，再通过虚拟设备或 RPC gateway 接到客体
 
 对照当前 Linux 实现，当前范围更具体的优先级应当是：
 
@@ -1009,7 +1086,7 @@ sim-run --scenario scenarios/failover.yaml --compare flat,recursive
 - 再保证 `ubcore` / `uburma` / `vfio-ub` 所依赖的最小对象边界
 - 最后再把 `UBM` / `UB Service Core` 的更高层能力叠上去
 
-### 8.7 容量与淘汰
+### 9.7 容量与淘汰
 
 每个 level store 维护：
 
@@ -1026,7 +1103,7 @@ sim-run --scenario scenarios/failover.yaml --compare flat,recursive
 3. 若上一层也高水位，则继续级联
 4. 顶层无法容纳时丢弃
 
-### 8.8 完整性与健康状态
+### 9.8 完整性与健康状态
 
 当前范围只模拟统一语义，不模拟真实 checksum 算法：
 
@@ -1049,11 +1126,11 @@ sim-run --scenario scenarios/failover.yaml --compare flat,recursive
 
 ---
 
-## 9. 场景设计
+## 10. 场景设计
 
 当前范围至少包含以下内置场景。
 
-### 9.1 场景 A：2 Host / 单 Switch / 基本 promotion
+### 10.1 场景 A：2 Host / 单 Switch / 基本 promotion
 
 目的：
 
@@ -1062,35 +1139,35 @@ sim-run --scenario scenarios/failover.yaml --compare flat,recursive
 - 验证请求路径追踪
 - 验证 QEMU 平台下的 host / `UBPU` / `Entity` / memory tier 映射
 
-### 9.2 场景 B：GPU 容量紧张 / cascading eviction
+### 10.2 场景 B：GPU 容量紧张 / cascading eviction
 
 目的：
 
 - 验证 L2 高水位触发 eviction
 - 验证 L2→L3→L4 级联下沉
 
-### 9.3 场景 C：Host 故障绕行
+### 10.3 场景 C：Host 故障绕行
 
 目的：
 
 - 验证递归路由绕开失败 host
 - 与 flat routing 基线对比
 
-### 9.4 场景 D：Block corruption
+### 10.4 场景 D：Block corruption
 
 目的：
 
 - 验证 integrity failure 检测
 - 验证 quarantine 和 fallback
 
-### 9.5 场景 E：热集与长尾混合负载
+### 10.5 场景 E：热集与长尾混合负载
 
 目的：
 
 - 评估层级缓存命中率
 - 观察不同容量配比下的行为差异
 
-### 9.6 场景 F：PyPTO 层级标签透传
+### 10.6 场景 F：PyPTO 层级标签透传
 
 目的：
 
@@ -1098,7 +1175,7 @@ sim-run --scenario scenarios/failover.yaml --compare flat,recursive
 - 验证 host runtime 到 chip backend 的 dispatch trace
 - 验证 serving path 与 runtime path 能对齐观察
 
-### 9.7 场景 G：`pl.free` 与 ring-layer retire
+### 10.7 场景 G：`pl.free` 与 ring-layer retire
 
 目的：
 
@@ -1106,7 +1183,7 @@ sim-run --scenario scenarios/failover.yaml --compare flat,recursive
 - 验证 inner scope 的 retire 不被 outer scope head 阻塞
 - 验证 ring pressure 指标和 blocked trace
 
-### 9.8 场景 H：Linqu 平台自举验证
+### 10.8 场景 H：Linqu 平台自举验证
 
 目的：
 
@@ -1114,7 +1191,7 @@ sim-run --scenario scenarios/failover.yaml --compare flat,recursive
 - 验证 level collapsing / active level / reserved level 的平台表达
 - 验证 `UB` topology、`TaskCoord`、`pl.Level`、QEMU device mapping 四者一致
 
-### 9.9 场景 I：`lingqu_shmem` 基本验证
+### 10.9 场景 I：`lingqu_shmem` 基本验证
 
 目的：
 
@@ -1122,7 +1199,7 @@ sim-run --scenario scenarios/failover.yaml --compare flat,recursive
 - 验证 one-sided put/get 与 barrier 后一致性
 - 验证 QEMU 平台中的 shared-memory backing 与 guest-visible region 对齐
 
-### 9.10 场景 J：`lingqu_block` 异步 IO 验证
+### 10.10 场景 J：`lingqu_block` 异步 IO 验证
 
 目的：
 
@@ -1130,30 +1207,30 @@ sim-run --scenario scenarios/failover.yaml --compare flat,recursive
 - 验证异步 read/write completion 与 producer/consumer 归因
 - 验证 block service 作为 virtual device 或 host service gateway 的表现
 
-### 9.11 场景 K：`lingqu_dfs` namespace 验证
+### 10.11 场景 K：`lingqu_dfs` namespace 验证
 
 目的：
 
 - 验证全局路径 namespace
 - 验证 metadata path 与 data path 的分离可观测性
-- 验证 guest runtime 发起文件访问时的 host-side service 对接
+- 验证 guest runtime 发起文件访问时的平台基础设施侧服务对接
 
-### 9.12 场景 L：`lingqu_db` KV 与 pub/sub 验证
+### 10.12 场景 L：`lingqu_db` KV 与 pub/sub 验证
 
 目的：
 
 - 验证 Redis-like KV/Hash 命令和 pipeline
 - 验证基本 publish/subscribe 通知链路
 
-### 9.13 场景 M：`rust_llm_server_design_v8.md` MVP 作为首个 workload
+### 10.13 场景 M：`rust_llm_server_design_v8.md` MVP 作为首个 workload
 
 目的：
 
 - 在 QEMU-based Linqu simulator 上挂载 LLM serving MVP
-- 验证 recursive hierarchy、routing、promotion/eviction、integrity、data services 与 runtime semantics 的组合行为
+- 验证 recursive hierarchy、routing、promotion/eviction、integrity、data services 与平台运行时/控制面能力的组合行为
 - 证明该平台不是为某一 workload 特化，而是能承载第一个真实上层系统
 
-### 9.14 场景 N：guest UAPI 最小可见性验证
+### 10.14 场景 N：guest UAPI 最小可见性验证
 
 目的：
 
@@ -1163,9 +1240,9 @@ sim-run --scenario scenarios/failover.yaml --compare flat,recursive
 
 ---
 
-## 10. 配置设计
+## 11. 配置设计
 
-### 10.1 配置原则
+### 11.1 配置原则
 
 - YAML 驱动
 - 单文件可描述一个完整 scenario
@@ -1173,7 +1250,7 @@ sim-run --scenario scenarios/failover.yaml --compare flat,recursive
 - 显式保留 Linqu / PyPTO hierarchy 语义
 - `UBPU` / `Entity` / `UB domain` 等 `UB` 对象应作为一等配置对象出现
 
-### 10.2 建议配置骨架
+### 11.2 建议配置骨架
 
 ```yaml
 scenario:
@@ -1288,9 +1365,9 @@ outputs:
 
 ---
 
-## 11. 输出与可观测性
+## 12. 输出与可观测性
 
-### 11.1 Metrics
+### 12.1 Metrics
 
 最小指标集合：
 
@@ -1312,7 +1389,7 @@ outputs:
 - `ring_retire_blocked_total`
 - `ring_layer_occupancy{depth=...}`
 
-### 11.2 事件 Trace
+### 12.2 事件 Trace
 
 每个请求输出可选 trace：
 
@@ -1329,7 +1406,7 @@ outputs:
 - final latency
 - dispatch chain
 
-### 11.3 场景报告
+### 12.3 场景报告
 
 每次运行结束后输出：
 
@@ -1341,7 +1418,7 @@ outputs:
 
 ---
 
-## 12. 与生产系统的映射关系
+## 13. 与生产系统的映射关系
 
 仿真系统不是一次性工具，设计上必须为生产实现让路。
 
@@ -1355,7 +1432,7 @@ outputs:
 
 同时，仿真平台实现路径需要和“QEMU 作为系统级底座”这一前提对齐，而不是独立发展出另一套与 QEMU 无关的模拟框架。
 
-### 12.1 可直接复用的部分
+### 13.1 可直接复用的部分
 
 - 层级枚举与公共类型
 - 配置 schema 的主体结构
@@ -1368,7 +1445,7 @@ outputs:
 - workload target 挂载模型
 - `UBPU` / `Entity` / `UB domain` / `UMMU` / `UB Decoder` 的对象抽象
 
-### 12.2 后续可替换的部分
+### 13.2 后续可替换的部分
 
 - simulated `BlockStore` → `GpuBlockStore` / `HostBlockStore` / `CxlBlockStore`
 - simulated allocator → 真实 allocator client
@@ -1379,7 +1456,7 @@ outputs:
 - shmem/block/dfs/db service adapters → 真实 Lingqu data services
 - QEMU integration layer → 实际 QEMU machine/device integration
 
-### 12.3 明确不会复用的部分
+### 13.3 明确不会复用的部分
 
 - 事件调度引擎本身
 - mock workload 生成器
@@ -1387,7 +1464,7 @@ outputs:
 
 ---
 
-## 13. 代码组织建议
+## 14. 代码组织建议
 
 以下目录树只是**一种可能的 Rust workspace 布局**，用于帮助讨论边界；它不代表这些文件当前已经存在于仓库中。
 
@@ -1437,7 +1514,7 @@ simulator/
 
 ---
 
-## 14. 里程碑
+## 15. 里程碑
 
 ### Milestone 0
 
@@ -1474,7 +1551,7 @@ simulator/
 
 ---
 
-## 15. 验收标准
+## 16. 验收标准
 
 满足以下条件即可认为本文档对应的系统设计成立：
 
@@ -1493,11 +1570,11 @@ simulator/
 
 ---
 
-## 16. L5/L6、Gossip 与 Allocator HA 扩展设计
+## 17. L5/L6、Gossip 与 Allocator HA 扩展设计
 
 当前正文已经把 `L5/L6`、gossip 和 allocator 主备切换当成保留位提出，但如果它们始终停留在路线图里，前面的 `L0-L7` 编号和控制面位置仍然是不完整的。因此，本节开始把这三个扩展点落成具体设计。
 
-### 16.1 扩展目标
+### 17.1 扩展目标
 
 这一层扩展的目标不是把平台做成完整生产集群，而是补齐三个当前缺口：
 
@@ -1505,7 +1582,7 @@ simulator/
 - 让跨 `L4` 的拓扑、健康、容量和路由摘要能够传播，而不是完全依赖中心化静态配置
 - 让 allocator 不再是单点对象，而具备最小主备切换能力
 
-### 16.2 L5/L6 对象语义
+### 17.2 L5/L6 对象语义
 
 在当前文档里，`L2-L4` 已经有较清晰的 `UBPU`、host 和 `UB domain` 映射。向上扩展时，建议采用以下对象语义：
 
@@ -1536,7 +1613,7 @@ simulator/
 
 继续解释为真实可用的跨域路径坐标，而不是仅保留字段。
 
-### 16.3 L5/L6 拓扑与控制面
+### 17.3 L5/L6 拓扑与控制面
 
 在扩展后的控制面里，建议形成如下层次：
 
@@ -1558,7 +1635,7 @@ simulator/
 - 上行传播
 - 下行决策
 
-### 16.4 最小 Gossip 聚合协议
+### 17.4 最小 Gossip 聚合协议
 
 为避免 `L5/L6` 完全依赖强中心化轮询，建议引入最小 gossip 聚合协议。该协议不是为生产网络优化的最终协议，而是一个用于仿真和验证的状态传播模型。
 
@@ -1605,7 +1682,7 @@ simulator/
 - `RouteDigestApplied`
 - `GossipDigestExpired`
 
-### 16.5 Allocator 主备切换
+### 17.5 Allocator 主备切换
 
 当前文档中的 allocator 还是单对象视角。向上扩展后，allocator 至少要具备：
 
@@ -1662,7 +1739,7 @@ simulator/
 - `AllocatorRecoveryStarted`
 - `AllocatorRecoveryCompleted`
 
-### 16.6 对现有模块的影响
+### 17.6 对现有模块的影响
 
 这三个扩展点会直接影响现有模块边界：
 
@@ -1684,7 +1761,7 @@ simulator/
 
 这些仍然是职责边界，不预设为具体文件名。
 
-### 16.7 新增指标与验收点
+### 17.7 新增指标与验收点
 
 建议新增以下指标：
 
@@ -1704,7 +1781,7 @@ simulator/
 - allocator leader 故障后，follower 能在可配置时间内接管
 - 主备切换期间 allocation 语义可解释，且不会出现静默双主
 
-### 16.8 后续更远期增强
+### 17.8 后续更远期增强
 
 在这三个扩展点落稳之后，再考虑更后面的增强方向：
 
@@ -1717,12 +1794,12 @@ simulator/
 
 ---
 
-## 17. 结论
+## 18. 结论
 
-这个版本的 High Level Design 选择先构建一个 **基于 QEMU、符合 UB/Linqu spec、以 Rust 承载 `UB` 对象层、Linqu 语义层和 workload 挂载层** 的系统仿真平台。目标不是先做一个只服务于 LLM 的专用模拟器，而是先把平台本身搭对，再用 `rust_llm_server_design_v8.md` 的 MVP 作为第一个真实 workload 去验证它。
+这个 High Level Design 选择先构建一个 **基于 QEMU、符合 UB/Linqu spec、以 Rust 承载 `UB` 对象层、`UB/Linqu` 仿真核心、管控面与基础设施仿真以及 workload 挂载层** 的系统仿真平台。目标不是先做一个只服务于 LLM 的专用模拟器，而是先把平台本身搭对，再用 `rust_llm_server_design_v8.md` 的 MVP 作为第一个真实 workload 去验证它。
 
-如果这个仿真平台能跑通，那么后续工作就不再是“为单个业务不断重写模拟逻辑”，而是：
+如果这个仿真平台能跑通，那么后续工作就不再是“为单个业务不断添加仿真逻辑”，而是：
 
 - 在稳定的平台语义上增加新的 workload
-- 把仿真里的 Linqu 语义实现逐步替换成更真实的 QEMU 集成和设备模型
-- 让 LLM serving 成为平台验证样例，而不是平台定义本身
+- 把当前仿真实现逐步替换成更真实的 QEMU 集成、设备模型和管控面组件
+- 让 LLM serving 成为平台验证样例，而不只是平台定义本身
