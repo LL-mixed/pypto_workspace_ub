@@ -1,4 +1,4 @@
-# Rust LLM Server MVP 仿真系统 High Level Design
+# Rust LLM Server MVP 仿真系统 High Level Design (v1)
 
 > 目标：构建一个 **基于 QEMU、符合 UB/Linqu spec 的系统级仿真平台**，用于验证 UB/PyPTO 层级运行时设计。Linqu 和 UB 为同等的概念，在本文档中不加区分。`draft/rust_llm_server_design_v8.md` 的 MVP 是这个平台上的第一个重点验证目标。
 >

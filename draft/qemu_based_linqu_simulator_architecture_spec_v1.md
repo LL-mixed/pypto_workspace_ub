@@ -1,4 +1,4 @@
-# QEMU-based Linqu Simulator Architecture Spec
+# QEMU-based Linqu Simulator Architecture Spec (v1)
 
 > 目标：定义一个 **基于 QEMU、符合 UB/Linqu spec 的系统级仿真平台**。这里的 `Linqu` 采用与你给出的说明一致的含义，即 `Linqu === UB === UnifiedBus`。该平台用于承载 UB/PyPTO 运行时语义、Lingqu 数据系统服务，以及上层 workload。`draft/rust_llm_server_design_v8.md` 的 MVP 是该平台上的第一个重点验证 workload。
 
