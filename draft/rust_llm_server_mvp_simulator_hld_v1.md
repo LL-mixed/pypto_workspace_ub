@@ -70,11 +70,11 @@
 
 本 HLD 后续所有 `Linqu` 表述，默认都应与 `UB` 规范对象对齐，并至少参考以下文档：
 
-- [UB-Base-Specification-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Base-Specification-2.0-en.pdf)
-- [UB-Firmware-Specification-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Firmware-Specification-2.0-en.pdf)
-- [UB-Software-Reference-Design-for-OS-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Software-Reference-Design-for-OS-2.0-en.pdf)
-- [UB-Service-Core-SW-Arch-RD-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Service-Core-SW-Arch-RD-2.0-en.pdf)
-- [UB-Mgmt-OM-SW-Arch-and-IF-RD-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Mgmt-OM-SW-Arch-and-IF-RD-2.0-en.pdf)
+- [UB-Base-Specification-2.0-en.pdf](../ub_docs/UB-Base-Specification-2.0-en.pdf)
+- [UB-Firmware-Specification-2.0-en.pdf](../ub_docs/UB-Firmware-Specification-2.0-en.pdf)
+- [UB-Software-Reference-Design-for-OS-2.0-en.pdf](../ub_docs/UB-Software-Reference-Design-for-OS-2.0-en.pdf)
+- [UB-Service-Core-SW-Arch-RD-2.0-en.pdf](../ub_docs/UB-Service-Core-SW-Arch-RD-2.0-en.pdf)
+- [UB-Mgmt-OM-SW-Arch-and-IF-RD-2.0-en.pdf](../ub_docs/UB-Mgmt-OM-SW-Arch-and-IF-RD-2.0-en.pdf)
 
 对仿真平台而言，最关键的 `UB` 基线如下：
 
@@ -91,7 +91,7 @@
 
 除规范文档外，本 HLD 还参考：
 
-- [UB-Implementation-Summary.md](/Volumes/repos/pypto_workspace/ub_docs/UB-Implementation-Summary.md)
+- [UB-Implementation-Summary.md](../ub_docs/UB-Implementation-Summary.md)
 
 这份实现总结说明，当前 Linux 内核里的 `UB` 主线落点更接近一个“内核设备栈 + URMA 通信栈”，而不是直接等同于 `UBM` 或 `UB Service Core`。其主链路可以概括为：
 
@@ -122,29 +122,29 @@
 
 | 术语 | 本文中的含义 | 主要出处 |
 |---|---|---|
-| `L0` | Core / Core-group。最细粒度执行单元，对应 AIC / AIV / core-group 调度位。当前平台仅保留标签与边界，真实执行由 `simpler` 负责。 | [machine_hierarchy_and_function_hierarchy.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md), [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md) |
-| `L1` | Chip die。可选层级；当前单 die 模型中可省略。本文把它作为保留层级位，不在 MVP 中激活。 | [machine_hierarchy_and_function_hierarchy.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md), [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md) |
-| `L2` | Chip。一个 chip-level execution boundary；在本文中优先映射为单个 `UBPU` 或一组紧耦合 `Entity` 暴露出的 guest-visible endpoint。 | [machine_hierarchy_and_function_hierarchy.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md), [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md), [UB-Base-Specification-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Base-Specification-2.0-en.pdf) |
-| `L3` | Host。一个 OS instance；负责 host-side orchestration、Tier-2 边界和本地 cache / control-plane 视图。 | [machine_hierarchy_and_function_hierarchy.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md), [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md) |
-| `L4` | Cluster-level-0。局部池化与高带宽局部互连域；在本文中优先对齐 `UB domain`。 | [machine_hierarchy_and_function_hierarchy.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md), [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md), [UB-Base-Specification-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Base-Specification-2.0-en.pdf) |
-| `L5` | Cluster-level-1。多个 `L4` 单元之上的上层汇聚域；当前正文中默认 collapsed/stub，但在扩展章节中保留为 fabric cell 语义。 | [machine_hierarchy_and_function_hierarchy.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md), [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md) |
-| `L6` | Cluster-level-2。跨域/跨 rack 的更大规模互连与编排域；当前正文中默认 collapsed/stub。 | [machine_hierarchy_and_function_hierarchy.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md), [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md) |
-| `L7` | Global Coordinator。顶层入口、全局编排与 northbound 观察面。本文保留该编号位和控制面位置，不在 MVP 中激活。 | [machine_hierarchy_and_function_hierarchy.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md) |
-| `Linqu` / `Lingqu` | 本文中若指系统级对象与互连边界，默认与 `UB` 规范体系对齐；若指运行时/数据平面语义，则指建立在这些 `UB` 对象之上的 PyPTO/Linqu runtime 与 data service 视图。 | [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md), [linqu_data_system.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_data_system.md), `ub_docs/*` |
-| `UBPU` | 支持 `UB` 协议栈并实现设备特定功能的处理单元。本文中它是 L2 guest-visible endpoint 的首选对象。 | [UB-Base-Specification-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Base-Specification-2.0-en.pdf) |
-| `Entity` / `EID` | `UB` 中资源分配和事务通信的基本对象及其标识。本文把它作为 device / route / resource-space / UAPI 设计的基础对象。 | [UB-Base-Specification-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Base-Specification-2.0-en.pdf), [UB-Implementation-Summary.md](/Volumes/repos/pypto_workspace/ub_docs/UB-Implementation-Summary.md) |
-| `UB domain` / `UB Fabric` | `UB` 互连域与交换/链路集合。本文中 `L4` 优先映射 `UB domain`，`L5/L6` 逐步映射更大的 `UB Fabric` 管理域。 | [UB-Base-Specification-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Base-Specification-2.0-en.pdf) |
-| `UMMU` / `UB Decoder` | `UB` 体系中的地址映射、权限校验和资源空间访问边界。本文中它们属于 guest-visible device model 的核心对象。 | [UB-Software-Reference-Design-for-OS-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Software-Reference-Design-for-OS-2.0-en.pdf), [UB-Implementation-Summary.md](/Volumes/repos/pypto_workspace/ub_docs/UB-Implementation-Summary.md) |
-| `UBM` | `UB` 管理与运维平面。本文中默认作为控制面对象存在，可先落在宿主侧 control-plane service。 | [UB-Mgmt-OM-SW-Arch-and-IF-RD-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Mgmt-OM-SW-Arch-and-IF-RD-2.0-en.pdf) |
-| `UB OS Component` | `UB` 在 OS 侧的设备、内存、通信与虚拟化扩展。本文中 `L3` host 视图与 guest-visible object 设计需要优先贴近该对象边界。 | [UB-Software-Reference-Design-for-OS-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Software-Reference-Design-for-OS-2.0-en.pdf) |
-| `UB Service Core` | 集群级系统服务层，包括 `UBS Engine`、`UBS Mem`、`UBS Comm`、`UBS IO`、`UBS Virt`。本文把它视为平台本体的一部分，而不是可选 helper。 | [UB-Service-Core-SW-Arch-RD-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Service-Core-SW-Arch-RD-2.0-en.pdf) |
-| `TaskKey` | 完整层级坐标形式的任务身份，写作 `(logical_system, L7..L0, scope_depth, task_id)`。本文中任何跨层任务/trace/retire 语义都应最终可还原到该标识。 | [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md) |
-| `pl.Level` | PyPTO 的层级标签枚举，用于 `pl.at(level=...)` 和 `@pl.function(level=...)`。本文要求这些标签在 simulator 中不丢失。 | [machine_hierarchy_and_function_hierarchy.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md) |
-| `pl.free` | 对某个输出提前施加 scope token 的语义，不绕过 fanout safety。本文要求该语义至少在 trace 和场景判定中可表达。 | [multi_level_runtime_ring_and_pypto_free_api.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/multi_level_runtime_ring_and_pypto_free_api.md) |
-| `task_ring` / `buffer_ring` | 按层级、按 scope depth 划分的 runtime ring 结构。本文在 L3+ 负责其仿真语义；L0-L2 的真实实现归 `simpler`。 | [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md), [multi_level_runtime_ring_and_pypto_free_api.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/multi_level_runtime_ring_and_pypto_free_api.md) |
-| `simpler` | 已有的 L0-L2 runtime；负责 chip/core 侧 ring、scope、task 和执行语义。本文强调“适配，不重做”。 | [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md) |
-| `ChipBackend` | host-side runtime 与 chip/device runtime 之间的 Tier-2 适配边界；负责 `dispatch`、`h2d_copy`、`d2h_copy`、句柄映射与完成事件。 | [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md) |
-| `BlockStore` / `LevelNode` / `LevelAllocator` | `rust_llm_server_design_v8` 中用于递归 cache / route / allocation 的核心统一抽象。本文把它们视为首个 workload 消费的平台能力。 | [rust_llm_server_design_v8_zh.md](/Volumes/repos/pypto_workspace/draft/rust_llm_server_design_v8_zh.md) |
+| `L0` | Core / Core-group。最细粒度执行单元，对应 AIC / AIV / core-group 调度位。当前平台仅保留标签与边界，真实执行由 `simpler` 负责。 | [machine_hierarchy_and_function_hierarchy.md](../docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md), [linqu_runtime_design.md](../docs/pypto_top_level_design_documents/linqu_runtime_design.md) |
+| `L1` | Chip die。可选层级；当前单 die 模型中可省略。本文把它作为保留层级位，不在 MVP 中激活。 | [machine_hierarchy_and_function_hierarchy.md](../docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md), [linqu_runtime_design.md](../docs/pypto_top_level_design_documents/linqu_runtime_design.md) |
+| `L2` | Chip。一个 chip-level execution boundary；在本文中优先映射为单个 `UBPU` 或一组紧耦合 `Entity` 暴露出的 guest-visible endpoint。 | [machine_hierarchy_and_function_hierarchy.md](../docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md), [linqu_runtime_design.md](../docs/pypto_top_level_design_documents/linqu_runtime_design.md), [UB-Base-Specification-2.0-en.pdf](../ub_docs/UB-Base-Specification-2.0-en.pdf) |
+| `L3` | Host。一个 OS instance；负责 host-side orchestration、Tier-2 边界和本地 cache / control-plane 视图。 | [machine_hierarchy_and_function_hierarchy.md](../docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md), [linqu_runtime_design.md](../docs/pypto_top_level_design_documents/linqu_runtime_design.md) |
+| `L4` | Cluster-level-0。局部池化与高带宽局部互连域；在本文中优先对齐 `UB domain`。 | [machine_hierarchy_and_function_hierarchy.md](../docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md), [linqu_runtime_design.md](../docs/pypto_top_level_design_documents/linqu_runtime_design.md), [UB-Base-Specification-2.0-en.pdf](../ub_docs/UB-Base-Specification-2.0-en.pdf) |
+| `L5` | Cluster-level-1。多个 `L4` 单元之上的上层汇聚域；当前正文中默认 collapsed/stub，但在扩展章节中保留为 fabric cell 语义。 | [machine_hierarchy_and_function_hierarchy.md](../docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md), [linqu_runtime_design.md](../docs/pypto_top_level_design_documents/linqu_runtime_design.md) |
+| `L6` | Cluster-level-2。跨域/跨 rack 的更大规模互连与编排域；当前正文中默认 collapsed/stub。 | [machine_hierarchy_and_function_hierarchy.md](../docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md), [linqu_runtime_design.md](../docs/pypto_top_level_design_documents/linqu_runtime_design.md) |
+| `L7` | Global Coordinator。顶层入口、全局编排与 northbound 观察面。本文保留该编号位和控制面位置，不在 MVP 中激活。 | [machine_hierarchy_and_function_hierarchy.md](../docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md) |
+| `Linqu` / `Lingqu` | 本文中若指系统级对象与互连边界，默认与 `UB` 规范体系对齐；若指运行时/数据平面语义，则指建立在这些 `UB` 对象之上的 PyPTO/Linqu runtime 与 data service 视图。 | [linqu_runtime_design.md](../docs/pypto_top_level_design_documents/linqu_runtime_design.md), [linqu_data_system.md](../docs/pypto_top_level_design_documents/linqu_data_system.md), `ub_docs/*` |
+| `UBPU` | 支持 `UB` 协议栈并实现设备特定功能的处理单元。本文中它是 L2 guest-visible endpoint 的首选对象。 | [UB-Base-Specification-2.0-en.pdf](../ub_docs/UB-Base-Specification-2.0-en.pdf) |
+| `Entity` / `EID` | `UB` 中资源分配和事务通信的基本对象及其标识。本文把它作为 device / route / resource-space / UAPI 设计的基础对象。 | [UB-Base-Specification-2.0-en.pdf](../ub_docs/UB-Base-Specification-2.0-en.pdf), [UB-Implementation-Summary.md](../ub_docs/UB-Implementation-Summary.md) |
+| `UB domain` / `UB Fabric` | `UB` 互连域与交换/链路集合。本文中 `L4` 优先映射 `UB domain`，`L5/L6` 逐步映射更大的 `UB Fabric` 管理域。 | [UB-Base-Specification-2.0-en.pdf](../ub_docs/UB-Base-Specification-2.0-en.pdf) |
+| `UMMU` / `UB Decoder` | `UB` 体系中的地址映射、权限校验和资源空间访问边界。本文中它们属于 guest-visible device model 的核心对象。 | [UB-Software-Reference-Design-for-OS-2.0-en.pdf](../ub_docs/UB-Software-Reference-Design-for-OS-2.0-en.pdf), [UB-Implementation-Summary.md](../ub_docs/UB-Implementation-Summary.md) |
+| `UBM` | `UB` 管理与运维平面。本文中默认作为控制面对象存在，可先落在宿主侧 control-plane service。 | [UB-Mgmt-OM-SW-Arch-and-IF-RD-2.0-en.pdf](../ub_docs/UB-Mgmt-OM-SW-Arch-and-IF-RD-2.0-en.pdf) |
+| `UB OS Component` | `UB` 在 OS 侧的设备、内存、通信与虚拟化扩展。本文中 `L3` host 视图与 guest-visible object 设计需要优先贴近该对象边界。 | [UB-Software-Reference-Design-for-OS-2.0-en.pdf](../ub_docs/UB-Software-Reference-Design-for-OS-2.0-en.pdf) |
+| `UB Service Core` | 集群级系统服务层，包括 `UBS Engine`、`UBS Mem`、`UBS Comm`、`UBS IO`、`UBS Virt`。本文把它视为平台本体的一部分，而不是可选 helper。 | [UB-Service-Core-SW-Arch-RD-2.0-en.pdf](../ub_docs/UB-Service-Core-SW-Arch-RD-2.0-en.pdf) |
+| `TaskKey` | 完整层级坐标形式的任务身份，写作 `(logical_system, L7..L0, scope_depth, task_id)`。本文中任何跨层任务/trace/retire 语义都应最终可还原到该标识。 | [linqu_runtime_design.md](../docs/pypto_top_level_design_documents/linqu_runtime_design.md) |
+| `pl.Level` | PyPTO 的层级标签枚举，用于 `pl.at(level=...)` 和 `@pl.function(level=...)`。本文要求这些标签在 simulator 中不丢失。 | [machine_hierarchy_and_function_hierarchy.md](../docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md) |
+| `pl.free` | 对某个输出提前施加 scope token 的语义，不绕过 fanout safety。本文要求该语义至少在 trace 和场景判定中可表达。 | [multi_level_runtime_ring_and_pypto_free_api.md](../docs/pypto_top_level_design_documents/multi_level_runtime_ring_and_pypto_free_api.md) |
+| `task_ring` / `buffer_ring` | 按层级、按 scope depth 划分的 runtime ring 结构。本文在 L3+ 负责其仿真语义；L0-L2 的真实实现归 `simpler`。 | [linqu_runtime_design.md](../docs/pypto_top_level_design_documents/linqu_runtime_design.md), [multi_level_runtime_ring_and_pypto_free_api.md](../docs/pypto_top_level_design_documents/multi_level_runtime_ring_and_pypto_free_api.md) |
+| `simpler` | 已有的 L0-L2 runtime；负责 chip/core 侧 ring、scope、task 和执行语义。本文强调“适配，不重做”。 | [linqu_runtime_design.md](../docs/pypto_top_level_design_documents/linqu_runtime_design.md) |
+| `ChipBackend` | host-side runtime 与 chip/device runtime 之间的 Tier-2 适配边界；负责 `dispatch`、`h2d_copy`、`d2h_copy`、句柄映射与完成事件。 | [linqu_runtime_design.md](../docs/pypto_top_level_design_documents/linqu_runtime_design.md) |
+| `BlockStore` / `LevelNode` / `LevelAllocator` | `rust_llm_server_design_v8` 中用于递归 cache / route / allocation 的核心统一抽象。本文把它们视为首个 workload 消费的平台能力。 | [rust_llm_server_design_v8_zh.md](rust_llm_server_design_v8_zh.md) |
 
 ---
 
@@ -2024,14 +2024,14 @@ levels:
 | `scenario.group` | 指定场景组 `U/P/M`，决定验收分组 | 本文第 10 节 |
 | `scenario.variant` | 指定场景组中的具体子变体 | 本文第 10 节 |
 | `topology.ub_domains` | `L4` / `UB domain` 级局部池化与路由单元 | `UB` 规范，本 HLD 第 4、9、10 节 |
-| `ub_runtime.active_levels` | 当前激活层级，本文默认 `[2,3,4]` | [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md), 本文第 4 节 |
+| `ub_runtime.active_levels` | 当前激活层级，本文默认 `[2,3,4]` | [linqu_runtime_design.md](../docs/pypto_top_level_design_documents/linqu_runtime_design.md), 本文第 4 节 |
 | `ub_runtime.reserved_levels` | 当前保留但不激活的层级编号 | 同上 |
-| `pypto.enable_function_labels` | 保留 `pl.Level` / hierarchy label | [machine_hierarchy_and_function_hierarchy.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md) |
-| `pypto.scope_runtime.enable_pl_free` | 打开 `pl.free` 语义与相关 trace | [multi_level_runtime_ring_and_pypto_free_api.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/multi_level_runtime_ring_and_pypto_free_api.md) |
-| `pypto.simpler_boundary.*` | 定义 `ChipBackend`/L2 边界适配方式 | [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md) |
-| `lingqu_data.*` | 打开最小数据服务落点 | [linqu_data_system.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_data_system.md), 本文第 9、10 节 |
-| `levels.l2_* / l3_* / l4_*` | 各层容量、水位、延迟模型 | [rust_llm_server_design_v8_zh.md](/Volumes/repos/pypto_workspace/draft/rust_llm_server_design_v8_zh.md), 本文第 9、10 节 |
-| `routing.mode` | `flat` 或 `recursive` 路由策略 | [rust_llm_server_design_v8_zh.md](/Volumes/repos/pypto_workspace/draft/rust_llm_server_design_v8_zh.md) |
+| `pypto.enable_function_labels` | 保留 `pl.Level` / hierarchy label | [machine_hierarchy_and_function_hierarchy.md](../docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md) |
+| `pypto.scope_runtime.enable_pl_free` | 打开 `pl.free` 语义与相关 trace | [multi_level_runtime_ring_and_pypto_free_api.md](../docs/pypto_top_level_design_documents/multi_level_runtime_ring_and_pypto_free_api.md) |
+| `pypto.simpler_boundary.*` | 定义 `ChipBackend`/L2 边界适配方式 | [linqu_runtime_design.md](../docs/pypto_top_level_design_documents/linqu_runtime_design.md) |
+| `lingqu_data.*` | 打开最小数据服务落点 | [linqu_data_system.md](../docs/pypto_top_level_design_documents/linqu_data_system.md), 本文第 9、10 节 |
+| `levels.l2_* / l3_* / l4_*` | 各层容量、水位、延迟模型 | [rust_llm_server_design_v8_zh.md](rust_llm_server_design_v8_zh.md), 本文第 9、10 节 |
+| `routing.mode` | `flat` 或 `recursive` 路由策略 | [rust_llm_server_design_v8_zh.md](rust_llm_server_design_v8_zh.md) |
 | `workload.type=rust_llm_server_mvp` | 首个 workload 的显式绑定位 | 本文第 10 节 |
 | `faults[]` | host degraded / corruption / route failure 等故障注入 | 本文第 9、10 节 |
 | `outputs.emit_*` | 指定 trace / metrics / report 输出面 | 本文第 12 节 |
