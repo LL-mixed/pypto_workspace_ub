@@ -8,6 +8,7 @@
 
 | Revision | Time | Brief Changelog |
 |---|---|---|
+| v2 | 2026-03-22 CST | 补充术语与出处、四层仿真栈、PyPTO device/UB 关系、模块关系、场景组细化和场景配置模板。 |
 | v1 | 2026-03-21 CST | 收紧目标为“基于 QEMU、符合 UB/Linqu spec 的系统级仿真平台”，补入 `UB` 管控面与基础设施仿真，明确 Rust LLM MVP 只是首个 workload。 |
 | v0 | 2026-03-20 20:14 CST | 初始版本。定义了面向 MVP 的仿真系统目标、范围、模块划分、执行模型、场景、配置、里程碑与验收标准。 |
 
@@ -114,6 +115,36 @@
 - `UBM`、`UB` 管控面基础设施、PoD 级管理和更高层资源调度，是平台本体的一部分；在当前实现路线里，其中一部分可以作为宿主侧控制面服务先行落地，另一部分则用全新设计来补足
 
 也就是说，先把 Linux 能识别和使用的 `UB` 对象链路模拟对，然后需要“模拟完整 SuperPoD 管理基础”，然后需要缺失的软件组件。
+
+### 1.4 术语与出处
+
+本节把正文中高频出现、且容易在多份设计文档之间漂移的术语统一收口。若后文未特别声明，均按下表理解。
+
+| 术语 | 本文中的含义 | 主要出处 |
+|---|---|---|
+| `L0` | Core / Core-group。最细粒度执行单元，对应 AIC / AIV / core-group 调度位。当前平台仅保留标签与边界，真实执行由 `simpler` 负责。 | [machine_hierarchy_and_function_hierarchy.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md), [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md) |
+| `L1` | Chip die。可选层级；当前单 die 模型中可省略。本文把它作为保留层级位，不在 MVP 中激活。 | [machine_hierarchy_and_function_hierarchy.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md), [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md) |
+| `L2` | Chip。一个 chip-level execution boundary；在本文中优先映射为单个 `UBPU` 或一组紧耦合 `Entity` 暴露出的 guest-visible endpoint。 | [machine_hierarchy_and_function_hierarchy.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md), [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md), [UB-Base-Specification-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Base-Specification-2.0-en.pdf) |
+| `L3` | Host。一个 OS instance；负责 host-side orchestration、Tier-2 边界和本地 cache / control-plane 视图。 | [machine_hierarchy_and_function_hierarchy.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md), [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md) |
+| `L4` | Cluster-level-0。局部池化与高带宽局部互连域；在本文中优先对齐 `UB domain`。 | [machine_hierarchy_and_function_hierarchy.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md), [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md), [UB-Base-Specification-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Base-Specification-2.0-en.pdf) |
+| `L5` | Cluster-level-1。多个 `L4` 单元之上的上层汇聚域；当前正文中默认 collapsed/stub，但在扩展章节中保留为 fabric cell 语义。 | [machine_hierarchy_and_function_hierarchy.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md), [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md) |
+| `L6` | Cluster-level-2。跨域/跨 rack 的更大规模互连与编排域；当前正文中默认 collapsed/stub。 | [machine_hierarchy_and_function_hierarchy.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md), [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md) |
+| `L7` | Global Coordinator。顶层入口、全局编排与 northbound 观察面。本文保留该编号位和控制面位置，不在 MVP 中激活。 | [machine_hierarchy_and_function_hierarchy.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md) |
+| `Linqu` / `Lingqu` | 本文中若指系统级对象与互连边界，默认与 `UB` 规范体系对齐；若指运行时/数据平面语义，则指建立在这些 `UB` 对象之上的 PyPTO/Linqu runtime 与 data service 视图。 | [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md), [linqu_data_system.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_data_system.md), `ub_docs/*` |
+| `UBPU` | 支持 `UB` 协议栈并实现设备特定功能的处理单元。本文中它是 L2 guest-visible endpoint 的首选对象。 | [UB-Base-Specification-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Base-Specification-2.0-en.pdf) |
+| `Entity` / `EID` | `UB` 中资源分配和事务通信的基本对象及其标识。本文把它作为 device / route / resource-space / UAPI 设计的基础对象。 | [UB-Base-Specification-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Base-Specification-2.0-en.pdf), [UB-Implementation-Summary.md](/Volumes/repos/pypto_workspace/ub_docs/UB-Implementation-Summary.md) |
+| `UB domain` / `UB Fabric` | `UB` 互连域与交换/链路集合。本文中 `L4` 优先映射 `UB domain`，`L5/L6` 逐步映射更大的 `UB Fabric` 管理域。 | [UB-Base-Specification-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Base-Specification-2.0-en.pdf) |
+| `UMMU` / `UB Decoder` | `UB` 体系中的地址映射、权限校验和资源空间访问边界。本文中它们属于 guest-visible device model 的核心对象。 | [UB-Software-Reference-Design-for-OS-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Software-Reference-Design-for-OS-2.0-en.pdf), [UB-Implementation-Summary.md](/Volumes/repos/pypto_workspace/ub_docs/UB-Implementation-Summary.md) |
+| `UBM` | `UB` 管理与运维平面。本文中默认作为控制面对象存在，可先落在宿主侧 control-plane service。 | [UB-Mgmt-OM-SW-Arch-and-IF-RD-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Mgmt-OM-SW-Arch-and-IF-RD-2.0-en.pdf) |
+| `UB OS Component` | `UB` 在 OS 侧的设备、内存、通信与虚拟化扩展。本文中 `L3` host 视图与 guest-visible object 设计需要优先贴近该对象边界。 | [UB-Software-Reference-Design-for-OS-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Software-Reference-Design-for-OS-2.0-en.pdf) |
+| `UB Service Core` | 集群级系统服务层，包括 `UBS Engine`、`UBS Mem`、`UBS Comm`、`UBS IO`、`UBS Virt`。本文把它视为平台本体的一部分，而不是可选 helper。 | [UB-Service-Core-SW-Arch-RD-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Service-Core-SW-Arch-RD-2.0-en.pdf) |
+| `TaskKey` | 完整层级坐标形式的任务身份，写作 `(logical_system, L7..L0, scope_depth, task_id)`。本文中任何跨层任务/trace/retire 语义都应最终可还原到该标识。 | [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md) |
+| `pl.Level` | PyPTO 的层级标签枚举，用于 `pl.at(level=...)` 和 `@pl.function(level=...)`。本文要求这些标签在 simulator 中不丢失。 | [machine_hierarchy_and_function_hierarchy.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md) |
+| `pl.free` | 对某个输出提前施加 scope token 的语义，不绕过 fanout safety。本文要求该语义至少在 trace 和场景判定中可表达。 | [multi_level_runtime_ring_and_pypto_free_api.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/multi_level_runtime_ring_and_pypto_free_api.md) |
+| `task_ring` / `buffer_ring` | 按层级、按 scope depth 划分的 runtime ring 结构。本文在 L3+ 负责其仿真语义；L0-L2 的真实实现归 `simpler`。 | [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md), [multi_level_runtime_ring_and_pypto_free_api.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/multi_level_runtime_ring_and_pypto_free_api.md) |
+| `simpler` | 已有的 L0-L2 runtime；负责 chip/core 侧 ring、scope、task 和执行语义。本文强调“适配，不重做”。 | [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md) |
+| `ChipBackend` | host-side runtime 与 chip/device runtime 之间的 Tier-2 适配边界；负责 `dispatch`、`h2d_copy`、`d2h_copy`、句柄映射与完成事件。 | [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md) |
+| `BlockStore` / `LevelNode` / `LevelAllocator` | `rust_llm_server_design_v8` 中用于递归 cache / route / allocation 的核心统一抽象。本文把它们视为首个 workload 消费的平台能力。 | [rust_llm_server_design_v8_zh.md](/Volumes/repos/pypto_workspace/draft/rust_llm_server_design_v8_zh.md) |
 
 ---
 
@@ -266,6 +297,49 @@
                 | CLI / Demo Runner             |
                 +-------------------------------+
 ```
+
+### 4.2.1 四层仿真栈
+
+为了避免把 `QEMU`、`UB`、`PyPTO device` 和 host runtime 混成同一层，建议在实现和验收中显式采用以下四层栈：
+
+```text
++---------------------------------------------------+
+| Layer 4: Host-Side Linqu Runtime / Workload       |
+| - host orchestration                              |
+| - TaskKey / hierarchy routing                     |
+| - scenario driver / workload harness              |
++--------------------------+------------------------+
+                           |
+                           v
++---------------------------------------------------+
+| Layer 3: PyPTO / simpler Device Runtime           |
+| - task_ring / buffer_ring / scope token           |
+| - pl.free / retire / function-group scheduling    |
+| - device-side dispatch semantics for L0/L1/L2     |
++--------------------------+------------------------+
+                           |
+                           v
++---------------------------------------------------+
+| Layer 2: UB Guest-Visible Device Model            |
+| - UBPU / Entity / UMMU / Decoder                  |
+| - queue / doorbell / completion / DMA / RAS       |
+| - guest-visible resource space and UAPI surface   |
++--------------------------+------------------------+
+                           |
+                           v
++---------------------------------------------------+
+| Layer 1: QEMU Machine / Board / Bus               |
+| - CPU / memory / interrupt / timer / fabric       |
+| - VM / board / virtual bus / multi-node platform  |
++---------------------------------------------------+
+```
+
+这四层的关系应固定为：
+
+- Layer 1 提供系统级仿真底座
+- Layer 2 提供 `UB` 设备对象与 guest-visible 边界
+- Layer 3 在这些边界之上实现 `PyPTO` / `simpler` 的 device runtime 语义
+- Layer 4 消费前三层能力，承载 Linqu host runtime、场景驱动和 `rust_llm_server` workload
 
 ### 4.3 Linqu / PyPTO 双视图
 
@@ -579,7 +653,51 @@ guest 设备面、guest UAPI、control plane、workload 的关系应明确为：
 
 本章中的模块名默认表示**建议的职责边界**，不是仓库中已经存在的 Rust 文件名；是否最终落成单独 `.rs` 文件、子模块目录或 crate，留待实现阶段决定。
 
-### 8.1 Core Types
+### 8.1 模块分层与依赖方向
+
+当前章节若只罗列模块，容易把“能调用什么”和“谁拥有状态”混在一起。实现时建议显式采用以下依赖方向：
+
+```text
+Workload Target Module
+        |
+        v
+Program Model Module -----> Ring Lifecycle Module
+        |                           |
+        v                           v
+Routing Module ------------> Cache Lifecycle Module
+        |                           |
+        v                           v
+Hierarchy Module ----------> Backend Adapter Module
+        |                           |
+        v                           v
+Guest UAPI Module ---------> Data Service Module
+        |                           |
+        +-------------> Topology Builder
+                              |
+                              v
+                        QEMU Integration Module
+                              |
+                              v
+                           Core Types
+
+Event Engine 横切所有层，负责驱动、调度、trace 和 replay。
+```
+
+依赖约束应明确为：
+
+- `Core Types` 是最底层公共定义，不依赖其他业务模块
+- `QEMU Integration Module` 只负责平台对象、设备和 host/QEMU bridge，不直接决定 routing 或 cache policy
+- `Topology Builder` 负责把配置变成对象图；它产出拓扑，但不执行请求
+- `Hierarchy Module` 持有运行时主对象，例如 simulated `LevelNode` / `BlockStore` / allocator / integrity verifier
+- `Routing Module` 只做选路，不拥有 block 生命周期状态
+- `Cache Lifecycle Module` 只做 hit/miss/fetch/promote/evict/quarantine 的状态迁移，不直接生成 topology
+- `Program Model Module` 和 `Ring Lifecycle Module` 负责 `PyPTO` / `simpler` 语义，不直接修改 `UB` platform object
+- `Backend Adapter Module` 是 L3 host runtime 与 L2 chip backend 的唯一边界，不应把 `simpler` 语义散落到其他层
+- `Guest UAPI Module` 与 `Data Service Module` 都是“能力暴露面”，它们消费 platform/runtime 对象，但不反向拥有核心拓扑
+- `Workload Target Module` 只消费平台能力，不能回写平台对象模型
+- `Event Engine` 是横切引擎，不应该承载具体业务规则
+
+### 8.2 Core Types
 
 定义仿真共享类型：
 
@@ -609,7 +727,7 @@ guest 设备面、guest UAPI、control plane、workload 的关系应明确为：
 - 能映射到 Linqu / PyPTO 的 hierarchy label 和 task key
 - 能覆盖 `(scope_level, task_id)` 到 `(logical_system, L7..L0, scope_depth, task_id)` 的演进
 
-### 8.2 QEMU Integration Layer
+### 8.3 QEMU Integration Module
 
 这是新的底层基座模块。
 
@@ -626,7 +744,7 @@ guest 设备面、guest UAPI、control plane、workload 的关系应明确为：
 - QEMU device model
 - QEMU 外部协同服务接口
 
-### 8.3 Topology Builder
+### 8.4 Topology Builder
 
 负责根据配置构建逻辑拓扑：
 
@@ -648,7 +766,7 @@ guest 设备面、guest UAPI、control plane、workload 的关系应明确为：
 - 支持 active / collapsed / stubbed level
 - 拓扑树不仅服务缓存路由，也服务 dispatch trace
 
-### 8.4 Hierarchy Layer
+### 8.5 Hierarchy Module
 
 这是仿真核心，提供生产 trait 的仿真实现：
 
@@ -672,7 +790,7 @@ guest 设备面、guest UAPI、control plane、workload 的关系应明确为：
 - serving hierarchy：`BlockStore` / `LevelNode` / `LevelAllocator`
 - runtime hierarchy：function label、task coordinate、scope 和 dispatch 边界
 
-### 8.5 Routing Layer
+### 8.6 Routing Module
 
 实现两套路由器：
 
@@ -688,7 +806,7 @@ guest 设备面、guest UAPI、control plane、workload 的关系应明确为：
 - 记录 route reason
 - 记录 route path 与 level path 的映射关系
 
-### 8.6 Cache Lifecycle Layer
+### 8.7 Cache Lifecycle Module
 
 负责 block 生命周期管理：
 
@@ -710,7 +828,7 @@ guest 设备面、guest UAPI、control plane、workload 的关系应明确为：
 
 当前范围里 task lifecycle 可以简化，但不能缺失。
 
-### 8.7 Program Model Layer
+### 8.8 Program Model Module
 
 职责：
 
@@ -722,7 +840,7 @@ guest 设备面、guest UAPI、control plane、workload 的关系应明确为：
 
 当前范围不做真实 PyPTO 编译，只做层级标签与 dispatch 语义建模。
 
-### 8.8 Ring Lifecycle Layer
+### 8.9 Ring Lifecycle Module
 
 职责：
 
@@ -736,7 +854,7 @@ guest 设备面、guest UAPI、control plane、workload 的关系应明确为：
 - 当前范围可以是逻辑模型，不必实现真实 lock-free ring
 - 但语义必须与 `multi_level_runtime_ring_and_pypto_free_api.md` 对齐
 
-### 8.9 Backend Adapter Layer
+### 8.10 Backend Adapter Module
 
 职责：
 
@@ -746,7 +864,7 @@ guest 设备面、guest UAPI、control plane、workload 的关系应明确为：
 
 当前范围不执行真实设备逻辑，但必须能在 trace 中表现出这个边界。
 
-### 8.10 Guest UAPI Layer
+### 8.11 Guest UAPI Module
 
 职责：
 
@@ -777,7 +895,7 @@ guest 设备面、guest UAPI、control plane、workload 的关系应明确为：
 - 失败模型
 - 可验证的 trace / metrics
 
-### 8.11 Data Service Layer
+### 8.12 Data Service Module
 
 职责：
 
@@ -817,7 +935,7 @@ guest 设备面、guest UAPI、control plane、workload 的关系应明确为：
   - batched pipeline
 - `PUBLISH/SUBSCRIBE` 最小通知模型
 
-### 8.12 Workload Target Layer
+### 8.13 Workload Target Module
 
 职责：
 
@@ -830,7 +948,7 @@ guest 设备面、guest UAPI、control plane、workload 的关系应明确为：
 - Linqu simulator 是平台
 - LLM server MVP 是 workload target，不是平台本身
 
-### 8.13 Event Engine
+### 8.14 Event Engine
 
 负责事件驱动执行：
 
@@ -861,7 +979,7 @@ guest 设备面、guest UAPI、control plane、workload 的关系应明确为：
 - 因果链追踪
 - 固定随机种子重放
 
-### 8.14 Workload Generator
+### 8.15 Workload Generator
 
 用于生成请求流。当前范围只需要支持三类 workload：
 
@@ -883,7 +1001,7 @@ workload 输入应支持两类来源：
 - serving-native 访问流
 - PyPTO-shaped hierarchy-labeled trace
 
-### 8.15 Fault Injection Layer
+### 8.16 Fault Injection Module
 
 用于故障注入：
 
@@ -901,7 +1019,7 @@ workload 输入应支持两类来源：
 
 故障必须是可配置、可重放、可统计的。
 
-### 8.16 Metrics and Reporting Layer
+### 8.17 Metrics and Reporting Module
 
 输出统一指标：
 
@@ -931,7 +1049,7 @@ workload 输入应支持两类来源：
 - 时间序列采样
 - 每事件 trace
 
-### 8.17 CLI and Runner Surface
+### 8.18 CLI and Runner Surface
 
 提供最小命令行接口：
 
@@ -940,6 +1058,111 @@ sim-run --scenario scenarios/mvp_2host_single_domain.yaml
 sim-run --scenario scenarios/eviction_pressure.yaml --router recursive
 sim-run --scenario scenarios/failover.yaml --compare flat,recursive
 ```
+
+### 8.19 主执行流
+
+为了避免模块关系只停留在静态依赖，建议把“一个请求如何穿过模块”固定成如下主执行流：
+
+```text
+Workload Generator / Workload Target
+        |
+        v
+Event Engine: RequestArrive
+        |
+        v
+Program Model Module
+  - 生成 FunctionLabel / TaskCoord / ScopeDepth
+        |
+        v
+Routing Module
+  - 基于 Hierarchy Module 提供的节点视图选路
+        |
+        v
+Cache Lifecycle Module
+  - 判断 hit/miss/fetch/promote/evict/quarantine
+        |
+        +------ miss/fetch ------> Data Service Module
+        |                              |
+        |                              v
+        |                       Guest UAPI / QEMU Integration
+        |
+        +------ dispatch ------> Backend Adapter Module
+                                       |
+                                       v
+                                 L2 chip boundary
+```
+
+这条执行流中的 ownership 应明确为：
+
+- `Workload Generator` 只产生请求，不拥有平台状态
+- `Program Model Module` 拥有 runtime-level label 和 task-coordinate 视图
+- `Routing Module` 只产出 route decision，不修改 block state
+- `Cache Lifecycle Module` 拥有 block 生命周期状态迁移
+- `Hierarchy Module` 提供节点/容量/健康/完整性等主状态查询接口
+- `Backend Adapter Module` 只负责 L3→L2 边界
+- `Guest UAPI` / `Data Service` / `QEMU Integration` 负责把动作映射到底层对象和设备面
+- `Event Engine` 只负责时序推进与因果串接
+
+### 8.20 主控制流与可观测性流
+
+除请求执行流外，还存在一条持续运行的控制/观测流。建议显式表达如下：
+
+```text
+Scenario / CLI
+    |
+    v
+Topology Builder -----> Hierarchy Module -----> Routing / Cache / Backend
+    |                     |                          |
+    |                     v                          v
+    +--------------> Fault Injection Module ----> Event Engine
+                          |
+                          v
+                 Metrics and Reporting Module
+                          |
+                          v
+                    summary / trace / replay
+```
+
+这条流回答的是：
+
+- 谁创建对象图：`Topology Builder`
+- 谁维护主运行态：`Hierarchy Module`
+- 谁注入扰动：`Fault Injection Module`
+- 谁把扰动和行为变成事件：`Event Engine`
+- 谁沉淀证据：`Metrics and Reporting Module`
+
+因此模块边界应进一步约束为：
+
+- `Topology Builder` 只能在初始化或重配置点修改对象图
+- 日常运行时的健康、容量、完整性和 route-related state 由 `Hierarchy Module` 持有
+- `Fault Injection Module` 不直接修改 report，而是通过事件驱动状态变化
+- `Metrics and Reporting Module` 只读核心状态和事件，不反向驱动业务逻辑
+
+### 8.21 模块关系到源码组织的映射建议
+
+如果后续落到实际代码目录，建议优先按“稳定依赖方向”组织，而不是按“功能名堆文件夹”组织：
+
+- `core/`
+  - 放 `Core Types`
+- `platform/`
+  - 放 `QEMU Integration`、`Topology Builder`
+- `runtime/`
+  - 放 `Hierarchy`、`Routing`、`Cache Lifecycle`、`Program Model`、`Ring Lifecycle`、`Backend Adapter`
+- `services/`
+  - 放 `Guest UAPI`、`Data Service`
+- `engine/`
+  - 放 `Event Engine`、`Fault Injection`、`Metrics and Reporting`
+- `workloads/`
+  - 放 `Workload Target`、`Workload Generator`
+- `cli/`
+  - 放 `CLI and Runner`
+
+这样拆分的好处是：
+
+- `platform` 不需要依赖 `workloads`
+- `runtime` 不需要依赖 `cli`
+- `engine` 可以横切 `platform` 与 `runtime`，但不拥有业务规则
+- `workloads` 只消费 `runtime/services/engine` 暴露的稳定接口
 
 ---
 
@@ -1049,6 +1272,97 @@ sim-run --scenario scenarios/failover.yaml --compare flat,recursive
 - `ubus` 可枚举的 `Entity` / `Port` / `Decoder`
 - `ubcore` / `uburma` 可绑定的通信端点
 
+### 9.5.1 是否需要 PyPTO device 仿真
+
+对当前 `rust_llm_server_design_v8.md` 的 MVP 来说，答案是：**暂时不需要完整的 `pypto` device 仿真。**
+
+MVP 关注的是：
+
+- 递归层级树能否承载 `BlockStore` / `LevelNode` / `LevelAllocator`
+- L2/L3/L4 的 route / fetch / store / evict / promote / quarantine 是否闭环
+- host orchestration 与 chip backend 的接口是否稳定
+- latency / capacity / fault / integrity 模型是否足够支撑设计验证
+
+因此，L2 侧当前只需要：
+
+- 一个 chip backend boundary object
+- 一个 guest-visible `UBPU` / `Entity` endpoint
+- `dispatch` / `completion` / `h2d` / `d2h` / `fault` 的边界事件
+- 可配置的 device-facing latency / bandwidth / queue-depth / failure 行为模型
+
+当前 **不要求** simulator 去实现：
+
+- `pypto` / `simpler` 的 device-side task ring
+- scope token、`pl.free`、layer-local retire 在 device 内部的真实执行
+- AIC/AIV kernel、DMA engine、device scheduler 的内部状态机
+
+换句话说，当前 MVP 需要的是 **chip backend 边界仿真**，而不是 **完整 device runtime 仿真**。
+
+只有在后续目标变成以下内容时，`pypto device` 仿真才应进入必做范围：
+
+- 验证 `pl.at(level=L0/L1/L2)` 的真实 device-side dispatch 语义
+- 验证 scope-driven ring stack 与 device 执行的耦合正确性
+- 评估 device runtime 内部调度、背压、并发和 kernel overlap
+- 让 simulator 直接承载 `simpler` 以内的运行时回归测试
+
+### 9.5.2 升级到真实 device-side runtime 验证时的新增组件
+
+当目标升级到“验证真实 `pl.at(level=L0/L1/L2)` 语义”或“直接运行 `simpler` 内回归测试”时，`pypto device` 仿真本身还不够，至少还需要以下组件一起到位：
+
+- `ChipBackend` 真实适配层
+  - 把 host/L3 runtime 的 `dispatch`、`completion`、错误传播与 task identity 映射真正接到 L2
+  - 不再允许只用 stub latency 表示 device 响应
+- Tier-2 内存边界与 DMA 模型
+  - host DRAM 与 device GM 必须是显式分离的内存域
+  - 必须支持 `h2d_copy` / `d2h_copy`、buffer handle 映射、完成队列、超时和 fault injection
+- L0-L2 runtime 状态机
+  - `task_ring[L][d]`、`buffer_ring[L][d]`、`last_task_alive`
+  - `scope.enter` / `scope.exit`
+  - `pl.free`、`task_freed`
+  - `fanout_count` / `ref_count` / layer-local retire
+- L0/L1/L2 拓扑与调度模型
+  - `AIC` / `AIV` / `core-group`
+  - optional `L1` die topology
+  - `InCoreFunctionGroup`、TPUSH/TPOP 或等价的共调度约束
+- compiler metadata 消费链路
+  - runtime 必须真正消费 hierarchy label、outlined function metadata、function group 信息
+  - 否则只能验证外层 workload，不能验证 `pl.at(level=...)` 本身
+- profiling / trace / replay
+  - 必须能检查 ring occupancy、retire ordering、dispatch/completion ordering、DMA latency、missing/late `pl.free`
+  - 这既是调试手段，也是回归测试判定依据
+
+因此，升级后的目标应被视为一个完整能力包：
+
+- 更细粒度的 `UB` 设备/内存边界仿真
+- 真正接入的 `PyPTO` / `simpler` device runtime 语义
+- compiler label → runtime dispatch → device execution → trace/profiling 的验证闭环
+
+### 9.5.3 PyPTO device 仿真与 UB 仿真的关系
+
+二者应明确建模为上下分层关系，而不是两个互斥选项：
+
+- `UB` 仿真是下层机器/设备/互连对象模型
+- `PyPTO device` 仿真是上层 device runtime 执行语义模型
+
+分工如下：
+
+- `UB` 仿真负责提供 guest-visible `UBPU` / `Entity` / `UMMU` / resource space / queue / doorbell / completion / DMA / memory region / RAS fault
+- `PyPTO device` 仿真负责消费这些对象和边界，在其上实现 `simpler`/L0-L2 的 `task_ring`、`buffer_ring`、scope token、`pl.free`、retire 和 function-group 调度语义
+
+推荐的分层栈为：
+
+1. QEMU machine / board / bus
+2. `UB` guest-visible device model
+3. `PyPTO` / `simpler` device runtime model
+4. host-side Linqu runtime / workload harness
+
+这样定义后，两者的职责边界就很清楚：
+
+- 只有 `UB` 仿真，没有 `PyPTO device` 仿真：只能证明设备对象和队列边界存在，不能证明 `pl.at(level=L0/L1/L2)` 的真实运行时语义
+- 只有 `PyPTO device` 仿真，没有 `UB` 仿真：runtime 语义失去 guest-visible 设备落点，很难与平台模型、Linux 设备栈和后续真实化路径对齐
+
+因此，要支持 `simpler` 内回归或真实 device-side runtime 验证，最终需要的是一套组合栈，而不是单独一个 `device simulator`。
+
 ### 9.6 与 Lingqu Data System 的关系
 
 在更完整的 Lingqu 体系中，runtime 会通过以下服务与数据平面交互：
@@ -1127,115 +1441,341 @@ sim-run --scenario scenarios/failover.yaml --compare flat,recursive
 
 ## 10. 场景设计
 
-当前范围至少包含以下内置场景。
+当前范围的场景不再按离散小项验收，而是收束为三个场景组。每个场景组内部可以包含多个 topology / load / failure 子变体，但对外按场景组闭环。
 
-### 10.1 场景 A：2 Host / 单 Switch / 基本 promotion
+### 10.1 场景组 U：UB/Linqu 平台与基础设施验证
 
-目的：
+该场景组收束原先的前 5 个场景以及所有面向 `UB` 平台对象、基础设施和 guest 可见性的场景，统一验证平台本体是否成立。
 
-- 验证树构建
-- 验证 L4 命中后提升到 L2
-- 验证请求路径追踪
-- 验证 QEMU 平台下的 host / `UBPU` / `Entity` / memory tier 映射
+覆盖原场景：
 
-### 10.2 场景 B：GPU 容量紧张 / cascading eviction
+- 场景 A：2 Host / 单 Switch / 基本 promotion
+- 场景 B：GPU 容量紧张 / cascading eviction
+- 场景 C：Host 故障绕行
+- 场景 D：Block corruption
+- 场景 E：热集与长尾混合负载
+- 场景 H：Linqu 平台自举验证
+- 场景 I：`lingqu_shmem` 基本验证
+- 场景 J：`lingqu_block` 异步 IO 验证
+- 场景 K：`lingqu_dfs` namespace 验证
+- 场景 L：`lingqu_db` KV 与 pub/sub 验证
+- 场景 N：guest UAPI 最小可见性验证
 
-目的：
+核心目的：
 
-- 验证 L2 高水位触发 eviction
-- 验证 L2→L3→L4 级联下沉
+- 验证 QEMU 平台下的 host / `UBPU` / `Entity` / memory tier / `UB domain` 映射
+- 验证 guest-visible `UB` 对象、queue、doorbell、completion、DMA、resource space 和最小 UAPI 边界
+- 验证 topology、routing、promotion、eviction、integrity、quarantine、failover 等平台基础行为
+- 验证 `lingqu_shmem` / `lingqu_block` / `lingqu_dfs` / `lingqu_db` 的最小可验证落点
+- 验证后续真实 Linux `ubfi` / `ubus` / `ummu` / `ubcore` 接入路径不是伪接口
 
-### 10.3 场景 C：Host 故障绕行
+建议子变体：
 
-目的：
+- `u_topology_bootstrap`
+- `u_promotion_eviction`
+- `u_failover_integrity`
+- `u_data_services`
+- `u_guest_uapi_visibility`
 
-- 验证递归路由绕开失败 host
-- 与 flat routing 基线对比
+各子变体建议说明如下。
 
-### 10.4 场景 D：Block corruption
+#### `u_topology_bootstrap`
 
-目的：
+输入/拓扑：
 
-- 验证 integrity failure 检测
-- 验证 quarantine 和 fallback
+- 最小 `2-host / single-switch / single-domain`
+- 每个 host 含一个 guest、一个或多个 `UBPU` endpoint、最小 `Entity` / `UMMU` / resource-space
 
-### 10.5 场景 E：热集与长尾混合负载
+驱动动作：
 
-目的：
+- 启动 QEMU machine 和宿主侧控制面
+- 完成 topology 枚举、地址分配、route 初始化
+- 加载最小 block/shmem backing，发起一轮基础 lookup / fetch / store 请求
 
-- 评估层级缓存命中率
-- 观察不同容量配比下的行为差异
+关键观察点：
 
-### 10.6 场景 F：PyPTO 层级标签透传
+- guest 内是否能看到预期 `UB` 对象集合
+- `UBPU` / `Entity` / host / `UB domain` / memory tier 映射是否一致
+- route trace、dispatch trace 和 topology report 是否彼此对齐
 
-目的：
+验收要点：
 
-- 验证 `pl.Level` 标签不会在 serving 仿真过程中丢失
-- 验证 host runtime 到 chip backend 的 dispatch trace
-- 验证 serving path 与 runtime path 能对齐观察
+- 平台能稳定自举并输出统一 topology report
+- guest-visible 对象与控制面对象一一对应
+- 至少一条基本请求路径可从 L4 走到 L2 并回传 completion
 
-### 10.7 场景 G：`pl.free` 与 ring-layer retire
+#### `u_promotion_eviction`
 
-目的：
+输入/拓扑：
 
-- 验证 `pl.free` 只是提前应用 scope token，不会绕过 fanout safety
-- 验证 inner scope 的 retire 不被 outer scope head 阻塞
-- 验证 ring pressure 指标和 blocked trace
+- 与 `u_topology_bootstrap` 相同或稍大规模 topology
+- 刻意压低 L2/L3 容量，制造高水位
 
-### 10.8 场景 H：Linqu 平台自举验证
+驱动动作：
 
-目的：
+- 先预热一批 blocks 形成局部命中
+- 再注入超出 L2 容量的请求流，触发 promotion 与 eviction
+- 重放一轮热点请求，观察是否出现预期回升
 
-- 验证 QEMU 平台成功创建 Linqu L0-L7 编号空间
-- 验证 level collapsing / active level / reserved level 的平台表达
-- 验证 `UB` topology、`TaskCoord`、`pl.Level`、QEMU device mapping 四者一致
+关键观察点：
 
-### 10.9 场景 I：`lingqu_shmem` 基本验证
+- L4 命中后提升到 L2 的路径
+- L2 高水位时是否触发 L2→L3→L4 级联下沉
+- 各层 `used_blocks`、eviction 次数、promotion 次数和 hit/miss 变化
 
-目的：
+验收要点：
 
-- 验证 shared region 建立与多 PE 可见性
-- 验证 one-sided put/get 与 barrier 后一致性
-- 验证 QEMU 平台中的 shared-memory backing 与 guest-visible region 对齐
+- promotion / cascading eviction 顺序可解释
+- 不出现“块丢失但无告警”的静默错误
+- 同一 workload 在不同容量配比下呈现可预期的行为差异
 
-### 10.10 场景 J：`lingqu_block` 异步 IO 验证
+#### `u_failover_integrity`
 
-目的：
+输入/拓扑：
 
-- 验证 `(UBA, LBA)` block 访问模型
-- 验证异步 read/write completion 与 producer/consumer 归因
-- 验证 block service 作为 virtual device 或 host service gateway 的表现
+- 至少 `2-host`，每 host 至少一个可选 route target
+- 开启 fault injection 和 integrity injection
 
-### 10.11 场景 K：`lingqu_dfs` namespace 验证
+驱动动作：
 
-目的：
+- 运行正常请求流后注入 host down、endpoint unreachable 或 route degraded
+- 对部分 block 注入 corruption / checksum failure / quarantine
+- 继续发起请求，观察 fallback、绕行或失败语义
 
-- 验证全局路径 namespace
-- 验证 metadata path 与 data path 的分离可观测性
-- 验证 guest runtime 发起文件访问时的平台基础设施侧服务对接
+关键观察点：
 
-### 10.12 场景 L：`lingqu_db` KV 与 pub/sub 验证
+- recursive routing 是否绕开失败 host
+- integrity failure 是否被记录并触发 quarantine
+- fallback 到其他副本或上层回源的路径是否完整
 
-目的：
+验收要点：
 
-- 验证 Redis-like KV/Hash 命令和 pipeline
-- 验证基本 publish/subscribe 通知链路
+- flat vs recursive 的行为差异可观测
+- corruption 不会被当成正常命中吞掉
+- 故障后的 route/health/resource 摘要会及时收敛
 
-### 10.13 场景 M：`rust_llm_server_design_v8.md` MVP 作为首个 workload
+#### `u_data_services`
 
-目的：
+输入/拓扑：
+
+- 最小 `lingqu_shmem` / `lingqu_block` / `lingqu_dfs` / `lingqu_db` 服务桩
+- 可选择 QEMU device model 或 host service gateway 作为接入方式
+
+驱动动作：
+
+- `shmem`：建立 region、执行 put/get、barrier
+- `block`：发起异步 `(UBA, LBA)` 读写并等待 completion
+- `dfs`：执行 namespace、metadata path、data path 的最小读写
+- `db`：执行 KV/Hash、pipeline 和一条 publish/subscribe 链路
+
+关键观察点：
+
+- guest 请求如何映射到虚拟设备或宿主侧服务
+- completion、barrier、namespace、pub/sub 等事件是否能出现在统一 trace 中
+- 数据服务对象与 `UB`/platform object 的映射是否明确
+
+验收要点：
+
+- 四类服务都具备最小可运行、可观测、可验证能力
+- service trace 能与 topology / health / tenant 视图关联
+- 不要求真实协议完整实现，但必须能被 scenario 精确驱动
+
+#### `u_guest_uapi_visibility`
+
+输入/拓扑：
+
+- guest 内暴露最小 `/dev/ubcoreX` 风格设备面
+- 暴露至少一条 ioctl / mmap / netlink / sysfs 观察路径
+
+驱动动作：
+
+- 在 guest 内枚举对象
+- 发起最小控制操作、状态读取或映射动作
+- 将 guest 侧看到的对象与宿主侧控制面对象做交叉校验
+
+关键观察点：
+
+- `ubfi -> ubus -> ubase -> ubcore/uburma -> ummu/vfio-ub` 的对象边界是否能闭环表达
+- guest 用户态是否能观察和操作 `UBUS` / `URMA` 最小对象
+- UAPI 是否对应真实后续 Linux 驱动接入路径
+
+验收要点：
+
+- 至少一条完整 guest UAPI 观测/操作链跑通
+- guest-visible object 与宿主侧仿真对象保持一致
+- 不使用只为 demo 存在的伪接口
+
+### 10.2 场景组 P：PyPTO / simpler 语义验证
+
+该场景组专门收束 `PyPTO` 语义相关场景，用来验证 hierarchy label、scope/ring 和 device dispatch 语义不会在平台化过程中丢失。
+
+覆盖原场景：
+
+- 场景 F：PyPTO 层级标签透传
+- 场景 G：`pl.free` 与 ring-layer retire
+
+核心目的：
+
+- 验证 `pl.Level` / hierarchy label 在 trace、dispatch、scenario report 中不丢失
+- 验证 host runtime → chip backend → device runtime 的语义链路可观测
+- 验证 `pl.free`、scope token、`fanout_count` / `ref_count`、layer-local retire 的关键不变量
+- 为后续接入真实 `PyPTO device` 仿真和 `simpler` 回归测试保留兼容场景骨架
+
+建议子变体：
+
+- `p_level_label_passthrough`
+- `p_scope_ring_retire`
+
+各子变体建议说明如下。
+
+#### `p_level_label_passthrough`
+
+输入/拓扑：
+
+- 一个包含 `pl.at(level=...)` 标签的 synthetic PyPTO trace 或最小 outlined function 集
+- 至少覆盖 L2、L3，以及一个保留级别标签
+
+驱动动作：
+
+- 从 host runtime 发起 dispatch
+- 经 `ChipBackend` 边界投递到 chip backend boundary object
+- 输出 dispatch trace、function metadata report、scenario summary
+
+关键观察点：
+
+- `pl.Level` / hierarchy label 是否从 compiler metadata 透传到 runtime trace
+- dispatch 过程中是否保留 level、task coordinate、function identity
+- host path 与 device-facing path 是否能在同一 report 中对齐
+
+验收要点：
+
+- label 不丢失、不被 workload 私有字段替代
+- 同一 dispatch 在 topology 视图和 runtime 视图中可相互定位
+- 为后续真实 `PyPTO device` 仿真保留兼容 metadata contract
+
+#### `p_scope_ring_retire`
+
+输入/拓扑：
+
+- synthetic scope trace 或最小 `pl.free` 示例程序
+- 至少包含 outer scope、inner scope、fanout pending、repeated free 几种情况
+
+驱动动作：
+
+- 构造若干 task/output，记录 `fanout_count`、`ref_count`
+- 在 inner scope 内执行 `pl.free`
+- 触发 scope exit、retire scan 和 blocked/unblocked 过程
+
+关键观察点：
+
+- `pl.free` 是否只提前应用 scope token，而不绕过 fanout safety
+- inner scope 的 retire 是否不再被 outer scope head 阻塞
+- repeated `pl.free` 是否保持幂等
+
+验收要点：
+
+- `task_freed`、`ref_count`、`fanout_count` 的变化可解释
+- ring pressure 指标和 blocked trace 与 retire 顺序一致
+- 为未来 `simpler` 回归测试保留一致的语义判定标准
+
+### 10.3 场景组 M：`rust_llm_server` MVP workload 验证
+
+该场景组专门承载 `rust_llm_server_design_v8.md` 的 MVP，作为首个 workload 验证目标，与平台/语义基础场景分开验收。
+
+覆盖原场景：
+
+- 场景 M：`rust_llm_server_design_v8.md` MVP 作为首个 workload
+
+核心目的：
 
 - 在 QEMU-based Linqu simulator 上挂载 LLM serving MVP
+- 验证 `BlockStore` / `LevelNode` / `LevelAllocator` 在 workload 中真正闭环
 - 验证 recursive hierarchy、routing、promotion/eviction、integrity、data services 与平台运行时/控制面能力的组合行为
 - 证明该平台不是为某一 workload 特化，而是能承载第一个真实上层系统
 
-### 10.14 场景 N：guest UAPI 最小可见性验证
+建议子变体：
 
-目的：
+- `m_single_domain_mvp`
+- `m_eviction_pressure`
+- `m_failover_compare_flat_vs_recursive`
 
-- 验证 `/dev/ubcoreX` 风格设备面可见
-- 验证最小 ioctl / mmap / netlink / sysfs 交互路径
-- 验证 `UBUS` 与 `URMA` 对象可被 guest 用户态观察和操作
+各子变体建议说明如下。
+
+#### `m_single_domain_mvp`
+
+输入/拓扑：
+
+- 最小 `2-host / single-domain` serving topology
+- 一个 MVP workload profile，覆盖 lookup、fetch、promotion 和基础回源
+
+驱动动作：
+
+- 启动 `rust_llm_server` MVP workload harness
+- 构建 `BlockStore` / `LevelNode` / `LevelAllocator` 树
+- 执行一轮稳定请求流并导出 metrics/report
+
+关键观察点：
+
+- workload 是否真正消费平台提供的 `BlockStore` / `LevelNode`
+- recursive hierarchy 和 serving path 是否闭环
+- 平台 trace、serving trace、resource summary 是否能相互映射
+
+验收要点：
+
+- MVP 可在 simulator 上稳定跑通
+- 不需要依赖平台外的专用 mock 才能成立
+- 报告中能清楚区分平台行为和 workload 行为
+
+#### `m_eviction_pressure`
+
+输入/拓扑：
+
+- 与 `m_single_domain_mvp` 相同，但显著压低缓存容量
+- 构造热集与长尾混合 workload
+
+驱动动作：
+
+- 先预热热集，再注入长尾请求
+- 持续运行直到触发多轮 promotion / eviction / 回源
+- 导出 workload 级 hit rate、latency 和资源占用变化
+
+关键观察点：
+
+- serving path 中的 eviction 是否与平台基础场景一致
+- hit rate、tail latency 与各层容量/高低水位之间的关系
+- data service 和 integrity 机制是否在 workload 中保持正确交互
+
+验收要点：
+
+- workload 行为能解释平台级 promotion/eviction 事件
+- 指标变化具有可重复性，不依赖偶然调度
+- 可作为后续参数调优和性能对比基线
+
+#### `m_failover_compare_flat_vs_recursive`
+
+输入/拓扑：
+
+- 至少两个可用 route target
+- 同时开启 `flat` 与 `recursive` 两种 router 配置
+- 开启 host failure 或 degraded domain 注入
+
+驱动动作：
+
+- 在正常条件下分别运行两套路由策略
+- 注入故障后重复相同 workload
+- 对比 route decision、回源次数、latency 和失败率
+
+关键观察点：
+
+- recursive routing 是否优先保留局部性并减少无效候选评估
+- flat routing 与 recursive routing 的恢复行为是否不同
+- failover 后 metrics / trace / report 是否仍然可解释
+
+验收要点：
+
+- 路由差异不仅体现在日志文字上，也体现在可量化指标上
+- 故障后的 serving 行为与平台健康/路由视图一致
+- 该子变体可作为对外演示 recursive hierarchy 价值的主场景
 
 ---
 
@@ -1361,6 +1901,140 @@ outputs:
   emit_data_service_trace: true
   emit_qemu_platform_trace: true
 ```
+
+### 11.3 场景组配置模板
+
+为避免场景组定义停留在文字层，建议在配置中把 `U/P/M` 三组作为一等对象显式表达。
+
+#### 11.3.1 场景组 U 模板
+
+```yaml
+scenario:
+  group: U
+  variant: u_topology_bootstrap
+
+topology:
+  hosts: 2
+  ubpus_per_host: 2
+  entities_per_ubpu: 2
+  ub_domains:
+    - id: domain0
+      hosts: [0, 1]
+
+guest_uapi:
+  expose_ubcore_dev: true
+  expose_sysfs: true
+  expose_netlink: false
+  expose_mmap: true
+
+lingqu_data:
+  shmem: { enabled: true }
+  block: { enabled: true }
+  dfs:   { enabled: false }
+  db:    { enabled: false }
+
+faults: []
+```
+
+适用说明：
+
+- `variant=u_topology_bootstrap` 重点打开 topology / object visibility
+- `variant=u_promotion_eviction` 重点压低 `levels.l2/l3` 容量并配置热点 workload
+- `variant=u_failover_integrity` 重点开启 host fault / corruption fault
+- `variant=u_data_services` 重点开启四类 `lingqu_data` 服务
+- `variant=u_guest_uapi_visibility` 重点打开 `guest_uapi.*` 字段并最小化 workload
+
+#### 11.3.2 场景组 P 模板
+
+```yaml
+scenario:
+  group: P
+  variant: p_scope_ring_retire
+
+pypto:
+  enable_function_labels: true
+  default_level: HOST
+  allow_levels: [CHIP, HOST, CLUSTER_0]
+  simpler_boundary:
+    enabled: true
+    chip_backend_mode: stub
+  scope_runtime:
+    enable_multi_layer_ring: true
+    enable_pl_free: true
+    max_scope_depth: 8
+
+runtime_semantics:
+  emit_scope_events: true
+  emit_ring_state: true
+  emit_function_labels: true
+  verify_pl_free_idempotent: true
+  verify_layer_local_retire: true
+
+synthetic_trace:
+  enabled: true
+  program: nested_scope_pl_free_demo
+  include_levels: [2, 3, 4]
+```
+
+适用说明：
+
+- `variant=p_level_label_passthrough` 重点打开 `emit_function_labels`
+- `variant=p_scope_ring_retire` 重点打开 `emit_scope_events`、`emit_ring_state` 和语义校验开关
+- 后续接入真实 `PyPTO device` 仿真时，优先扩展 `synthetic_trace.program` 与 `chip_backend_mode`
+
+#### 11.3.3 场景组 M 模板
+
+```yaml
+scenario:
+  group: M
+  variant: m_single_domain_mvp
+
+workload:
+  type: rust_llm_server_mvp
+  profile: single_domain_basic
+  qps: 2000
+  unique_prefixes: 256
+  blocks_per_request: 4
+  function_label_mode: host_orchestration
+
+routing:
+  mode: recursive
+
+levels:
+  l2_ubpu_tier:
+    capacity_blocks: 1024
+  l3_host_tier:
+    capacity_blocks: 8192
+  l4_domain_tier:
+    capacity_blocks: 65536
+```
+
+适用说明：
+
+- `variant=m_single_domain_mvp` 采用最小 `2-host / single-domain`
+- `variant=m_eviction_pressure` 重点压低容量并提高 `unique_prefixes`
+- `variant=m_failover_compare_flat_vs_recursive` 重点切换 `routing.mode` 并加入故障注入
+
+### 11.4 关键字段约束与来源
+
+为避免配置字段失去设计依据，建议对关键字段建立“字段名 -> 语义 -> 来源”的最小约束表。
+
+| 字段 | 语义 | 主要来源 |
+|---|---|---|
+| `scenario.group` | 指定场景组 `U/P/M`，决定验收分组 | 本文第 10 节 |
+| `scenario.variant` | 指定场景组中的具体子变体 | 本文第 10 节 |
+| `topology.ub_domains` | `L4` / `UB domain` 级局部池化与路由单元 | `UB` 规范，本 HLD 第 4、9、10 节 |
+| `ub_runtime.active_levels` | 当前激活层级，本文默认 `[2,3,4]` | [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md), 本文第 4 节 |
+| `ub_runtime.reserved_levels` | 当前保留但不激活的层级编号 | 同上 |
+| `pypto.enable_function_labels` | 保留 `pl.Level` / hierarchy label | [machine_hierarchy_and_function_hierarchy.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md) |
+| `pypto.scope_runtime.enable_pl_free` | 打开 `pl.free` 语义与相关 trace | [multi_level_runtime_ring_and_pypto_free_api.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/multi_level_runtime_ring_and_pypto_free_api.md) |
+| `pypto.simpler_boundary.*` | 定义 `ChipBackend`/L2 边界适配方式 | [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md) |
+| `lingqu_data.*` | 打开最小数据服务落点 | [linqu_data_system.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_data_system.md), 本文第 9、10 节 |
+| `levels.l2_* / l3_* / l4_*` | 各层容量、水位、延迟模型 | [rust_llm_server_design_v8_zh.md](/Volumes/repos/pypto_workspace/draft/rust_llm_server_design_v8_zh.md), 本文第 9、10 节 |
+| `routing.mode` | `flat` 或 `recursive` 路由策略 | [rust_llm_server_design_v8_zh.md](/Volumes/repos/pypto_workspace/draft/rust_llm_server_design_v8_zh.md) |
+| `workload.type=rust_llm_server_mvp` | 首个 workload 的显式绑定位 | 本文第 10 节 |
+| `faults[]` | host degraded / corruption / route failure 等故障注入 | 本文第 9、10 节 |
+| `outputs.emit_*` | 指定 trace / metrics / report 输出面 | 本文第 12 节 |
 
 ---
 
@@ -1746,9 +2420,9 @@ simulator/
   - 需要从 `L4` 扩展到 `L6`
 - `Event Engine`
   - 需要支持 gossip、lease、切换和恢复事件
-- `Metrics and Reporting Layer`
+- `Metrics and Reporting Module`
   - 需要支持 cell/federation/allocator 级指标
-- `QEMU Integration Layer`
+- `QEMU Integration Module`
   - 需要支持更多控制面协同服务，而不只是局部 domain
 
 建议新增的概念模块包括：

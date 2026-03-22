@@ -6,6 +6,7 @@
 
 | Revision | Time | Brief Changelog |
 |---|---|---|
+| v2 | 2026-03-22 CST | 补充 PyPTO device 仿真与 UB 仿真的关系、四层仿真栈，以及面向真实 device-side runtime 的新增组件要求。 |
 | v1 | 2026-03-21 CST | 去除文件名之外的版本耦合表达，收紧为基于 QEMU 的 UB/Linqu 规范一致仿真平台，并补入 `UB` 管控面与基础设施仿真边界。 |
 | v0 | 2026-03-20 CST | 初始版本。建立 QEMU-based UB/Linqu simulator 的架构、对象映射、QEMU 集成策略和验证矩阵。 |
 
@@ -197,6 +198,48 @@ QEMU 负责：
 | - virtual host/chip/device instances              |
 +---------------------------------------------------+
 ```
+
+### 4.1 四层仿真栈
+
+为了避免把 `QEMU`、`UB`、`PyPTO device` 和 host runtime 混成一个抽象层，建议在平台实现和文档表达里显式采用以下四层栈：
+
+```text
++---------------------------------------------------+
+| Layer 4: Host-Side Linqu Runtime / Workload       |
+| - host orchestration                              |
+| - hierarchy routing / TaskKey / workload harness  |
++--------------------------+------------------------+
+                           |
+                           v
++---------------------------------------------------+
+| Layer 3: PyPTO / simpler Device Runtime           |
+| - task_ring / buffer_ring / scope token           |
+| - pl.free / retire / function-group scheduling    |
+| - device-side dispatch semantics for L0/L1/L2     |
++--------------------------+------------------------+
+                           |
+                           v
++---------------------------------------------------+
+| Layer 2: UB Guest-Visible Device Model            |
+| - UBPU / Entity / UMMU / Decoder                  |
+| - queue / doorbell / completion / DMA / RAS       |
+| - guest-visible resource space and UAPI surface   |
++--------------------------+------------------------+
+                           |
+                           v
++---------------------------------------------------+
+| Layer 1: QEMU Machine / Board / Bus               |
+| - CPU / memory / interrupt / timer / fabric       |
+| - VM / board / virtual bus / multi-node platform  |
++---------------------------------------------------+
+```
+
+这四层的关系应固定为：
+
+- Layer 1 提供系统级仿真底座
+- Layer 2 提供 `UB` 设备对象与 guest-visible 边界
+- Layer 3 在这些边界之上实现 `PyPTO` / `simpler` 的 device runtime 语义
+- Layer 4 消费前三层能力，承载 Linqu host runtime、scenario driver 和 workload harness
 
 ---
 
@@ -411,6 +454,100 @@ QEMU 映射不能直接从 `L0-L7` 跳到设备实例，而应分两步：
 - 一个可调用 backend 边界
 - 一个具有 h2d/d2h 边界语义的执行域
 
+### 7.5 是否需要 PyPTO device 仿真
+
+为了达成 `rust_llm_server_design_v8.md` 当前定义的 MVP，**不需要**把 `pypto` 的 device 侧执行模型完整仿真出来。
+
+原因是当前 MVP 的验证目标集中在：
+
+- `BlockStore` / `LevelNode` / `LevelAllocator` 的分层抽象是否闭环
+- L2/L3/L4 层级树、递归路由、promotion、cascading eviction 是否成立
+- 容量、延迟、故障、完整性和指标语义是否可观测
+- host runtime 与 chip backend 之间的 dispatch / fetch / completion 边界是否清晰
+
+这些目标要求平台提供的是：
+
+- `L2` 作为一个可调用的 chip backend boundary object
+- guest-visible `UBPU` / `Entity` endpoint
+- `h2d` / `d2h` / completion / fault injection 的可观测边界事件
+- 可参数化的 latency / bandwidth / capacity / failure model
+
+而不是：
+
+- 重新实现 `pypto`/`simpler` 的 device-side task ring
+- 重新实现 AIC/AIV kernel 执行、scope-exit、layer-local retire
+- 在 simulator 内重放完整的 device instruction / kernel runtime 语义
+
+因此，当前平台对 `pypto device` 的正确要求是 **边界仿真**，不是 **设备内部执行仿真**。
+
+只有在目标升级为以下任一项时，才应把 `pypto` 的 device 仿真提升为必需能力：
+
+- 需要验证 `pl.at(level=L0/L1/L2)` 在 device 侧的真实运行时语义
+- 需要验证 scope-driven ring stack 在 chip 内部的行为正确性
+- 需要验证 `pl.free`、scope token、layer-local retire 与 device 执行的耦合
+- 需要评估 kernel/device runtime 级别的调度、背压和并发行为
+
+### 7.6 升级到真实 device-side runtime 验证时的新增组件
+
+一旦目标从“L2 边界仿真”升级为“真实 `pl.at(level=L0/L1/L2)` 语义验证”或“直接运行 `simpler` 内回归测试”，除了 `pypto device` 仿真本身，还需要同时补齐以下组件：
+
+- `ChipBackend` 真实适配层
+  - 不能再停留在 stub dispatch
+  - 必须把 host/L3 runtime 的 `dispatch`、`completion`、错误传播和 task identity 映射真正接到 L2
+- Tier-2 memory boundary 与 DMA 模型
+  - 必须显式建模 host DRAM 与 device GM 的分离
+  - 必须支持 `h2d_copy` / `d2h_copy`、buffer handle 映射、完成队列、超时和故障注入
+- L0-L2 runtime state machine
+  - 必须覆盖 `task_ring[L][d]`、`buffer_ring[L][d]`、`last_task_alive`
+  - 必须覆盖 `scope.enter` / `scope.exit`、`pl.free`、`task_freed`
+  - 必须覆盖 `fanout_count` / `ref_count` / layer-local retire
+- L0/L1/L2 拓扑与调度模型
+  - 必须区分 `AIC` / `AIV` / `core-group`
+  - 若目标包含多 die，还必须显式建模 `L1`
+  - 必须保留 `InCoreFunctionGroup`、TPUSH/TPOP 或其等价调度约束
+- 编译产物与 hierarchy label 的消费链路
+  - runtime 必须真正消费 `pl.at(level=...)` 对应的 hierarchy label
+  - 必须识别 outlined function metadata、function group 信息和 level-specific dispatch 输入
+- profiling / trace / replay 能力
+  - 必须能观测 ring occupancy、block count、retire ordering、DMA latency、dispatch/completion ordering
+  - 否则无法把“设计不一致”与“参数配置不同”区分开
+
+因此，升级后的能力包不应被理解为“只多做一个 device simulator”，而应被理解为：
+
+- `UB` 设备与内存边界仿真更细化
+- `PyPTO` / `simpler` device runtime 语义被真正接入
+- compiler label → runtime dispatch → device execution → trace/profiling 形成闭环
+
+### 7.7 PyPTO device 仿真与 UB 仿真的关系
+
+两者不是替代关系，而是明确的上下分层关系：
+
+- `UB` 仿真负责机器/设备/互连对象模型
+- `PyPTO device` 仿真负责设备之上的运行时执行语义模型
+
+更具体地说：
+
+- `UB` 仿真回答“guest 看到的这台 chip / UBPU / Entity / UMMU / queue / doorbell / completion / DMA / memory region 长什么样”
+- `PyPTO device` 仿真回答“建立在这些设备对象之上的 `simpler`/L0-L2 runtime 如何执行 `pl.at(level=L0/L1/L2)`、scope/ring、retire 和 function-group 调度”
+
+因此架构上应采用：
+
+1. QEMU machine / board / bus 提供系统底座
+2. `UB` 仿真提供 guest-visible `UBPU` / `Entity` / `UMMU` / resource-space / DMA / completion 边界
+3. `PyPTO device` 仿真消费这些边界，实现 `task_ring` / `buffer_ring` / `scope token` / `pl.free` / `dispatch`
+4. host-side Linqu runtime 再通过 `ChipBackend` 与 device runtime 对接
+
+这意味着：
+
+- 没有 `UB` 仿真时，`PyPTO device` 仿真缺少可靠的 guest-visible 设备落点
+- 没有 `PyPTO device` 仿真时，`UB` 仿真只能证明设备对象存在，不能证明 `pl.at(level=L0/L1/L2)` 的真实运行时语义
+
+所以在范围表达上，应明确写成：
+
+- `UB sim` 是下层平台对象与设备边界
+- `PyPTO device sim` 是上层 runtime 语义
+- 二者共同构成 “可验证 `simpler`/chip runtime 语义” 的完整 L2 仿真栈
+
 ---
 
 ## 8. Lingqu Data System 在平台中的落点
@@ -611,6 +748,42 @@ linqu-sim/
 │   └── pypto_trace_replay/
 └── scenarios/
 ```
+
+### 11.1 模块关系
+
+上面的目录只表达“放在哪里”，不表达“谁依赖谁”。当前平台建议固定以下关系：
+
+```text
+workloads
+   |
+   v
+semantics
+   | \
+   |  \----> adapters
+   |          |
+   v          v
+host_services  qemu
+       \       /
+        \     /
+         v   v
+        platform objects / device endpoints
+```
+
+更具体地说：
+
+- `qemu/` 提供 machine、device、bus、launch 和 guest-visible endpoint
+- `host_services/` 提供 `shmem` / `block` / `dfs` / `db` 的宿主侧服务能力
+- `semantics/` 持有 hierarchy、task、ring、dispatch、trace 的主语义
+- `adapters/` 负责把 `semantics/` 对接到 `simpler` 边界和 QEMU/device 边界
+- `workloads/` 只消费前述能力，不反向定义平台对象
+- `scenarios/` 只提供配置与驱动，不持有运行时主状态
+
+因此依赖方向应限制为：
+
+- `workloads -> semantics/adapters/host_services`
+- `semantics -> qemu/host_services` 通过稳定接口消费平台能力
+- `adapters -> qemu` 或 `adapters -> simpler boundary`
+- `qemu`、`host_services` 不能依赖 `workloads`
 
 ---
 
