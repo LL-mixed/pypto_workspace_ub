@@ -69,11 +69,11 @@
 
 本 HLD 后续所有 `Linqu` 表述，默认都应与 `UB` 规范对象对齐，并至少参考以下文档：
 
-- [UB-Base-Specification-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Base-Specification-2.0-en.pdf)
-- [UB-Firmware-Specification-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Firmware-Specification-2.0-en.pdf)
-- [UB-Software-Reference-Design-for-OS-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Software-Reference-Design-for-OS-2.0-en.pdf)
-- [UB-Service-Core-SW-Arch-RD-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Service-Core-SW-Arch-RD-2.0-en.pdf)
-- [UB-Mgmt-OM-SW-Arch-and-IF-RD-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Mgmt-OM-SW-Arch-and-IF-RD-2.0-en.pdf)
+- [UB-Base-Specification-2.0-en.pdf](../ub_docs/UB-Base-Specification-2.0-en.pdf)
+- [UB-Firmware-Specification-2.0-en.pdf](../ub_docs/UB-Firmware-Specification-2.0-en.pdf)
+- [UB-Software-Reference-Design-for-OS-2.0-en.pdf](../ub_docs/UB-Software-Reference-Design-for-OS-2.0-en.pdf)
+- [UB-Service-Core-SW-Arch-RD-2.0-en.pdf](../ub_docs/UB-Service-Core-SW-Arch-RD-2.0-en.pdf)
+- [UB-Mgmt-OM-SW-Arch-and-IF-RD-2.0-en.pdf](../ub_docs/UB-Mgmt-OM-SW-Arch-and-IF-RD-2.0-en.pdf)
 
 对仿真平台而言，最关键的 `UB` 基线如下：
 
@@ -90,7 +90,7 @@
 
 除规范文档外，本 HLD 还参考：
 
-- [UB-Implementation-Summary.md](/Volumes/repos/pypto_workspace/ub_docs/UB-Implementation-Summary.md)
+- [UB-Implementation-Summary.md](../ub_docs/UB-Implementation-Summary.md)
 
 这份实现总结说明，当前 Linux 内核里的 `UB` 主线落点更接近一个“内核设备栈 + URMA 通信栈”，而不是直接等同于 `UBM` 或 `UB Service Core`。其主链路可以概括为：
 

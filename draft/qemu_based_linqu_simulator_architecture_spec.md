@@ -34,22 +34,22 @@
 
 本平台必须同时对齐以下文档：
 
-- [linqu_runtime_design.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_runtime_design.md)
-- [machine_hierarchy_and_function_hierarchy.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md)
-- [multi_level_runtime_ring_and_pypto_free_api.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/multi_level_runtime_ring_and_pypto_free_api.md)
-- [linqu_data_system.md](/Volumes/repos/pypto_workspace/docs/pypto_top_level_design_documents/linqu_data_system.md)
+- [linqu_runtime_design.md](../docs/pypto_top_level_design_documents/linqu_runtime_design.md)
+- [machine_hierarchy_and_function_hierarchy.md](../docs/pypto_top_level_design_documents/machine_hierarchy_and_function_hierarchy.md)
+- [multi_level_runtime_ring_and_pypto_free_api.md](../docs/pypto_top_level_design_documents/multi_level_runtime_ring_and_pypto_free_api.md)
+- [linqu_data_system.md](../docs/pypto_top_level_design_documents/linqu_data_system.md)
 
 同时，第一个 workload 必须对齐：
 
-- [rust_llm_server_design_v8.md](/Volumes/repos/pypto_workspace/draft/rust_llm_server_design_v8.md)
+- [rust_llm_server_design_v8.md](rust_llm_server_design_v8.md)
 
 此外，`Linqu` 的系统级底座需要首先对齐以下 `UB` 规范文档，而不能只从本仓库的 runtime 文档反推：
 
-- [UB-Base-Specification-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Base-Specification-2.0-en.pdf)
-- [UB-Firmware-Specification-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Firmware-Specification-2.0-en.pdf)
-- [UB-Software-Reference-Design-for-OS-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Software-Reference-Design-for-OS-2.0-en.pdf)
-- [UB-Service-Core-SW-Arch-RD-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Service-Core-SW-Arch-RD-2.0-en.pdf)
-- [UB-Mgmt-OM-SW-Arch-and-IF-RD-2.0-en.pdf](/Volumes/repos/pypto_workspace/ub_docs/UB-Mgmt-OM-SW-Arch-and-IF-RD-2.0-en.pdf)
+- [UB-Base-Specification-2.0-en.pdf](../ub_docs/UB-Base-Specification-2.0-en.pdf)
+- [UB-Firmware-Specification-2.0-en.pdf](../ub_docs/UB-Firmware-Specification-2.0-en.pdf)
+- [UB-Software-Reference-Design-for-OS-2.0-en.pdf](../ub_docs/UB-Software-Reference-Design-for-OS-2.0-en.pdf)
+- [UB-Service-Core-SW-Arch-RD-2.0-en.pdf](../ub_docs/UB-Service-Core-SW-Arch-RD-2.0-en.pdf)
+- [UB-Mgmt-OM-SW-Arch-and-IF-RD-2.0-en.pdf](../ub_docs/UB-Mgmt-OM-SW-Arch-and-IF-RD-2.0-en.pdf)
 
 ### 2.1 术语基线
 
@@ -71,7 +71,7 @@
 
 除 `UB` 规范文档外，本平台还应参考当前内核实现总结：
 
-- [UB-Implementation-Summary.md](/Volumes/repos/pypto_workspace/ub_docs/UB-Implementation-Summary.md)
+- [UB-Implementation-Summary.md](../ub_docs/UB-Implementation-Summary.md)
 
 该总结反映的现实非常重要：当前 Linux 内核中的 `UB` 落点，主线并不是直接从 `UBM` 或 `UB Service Core` 起步，而是围绕以下链路展开：
 
