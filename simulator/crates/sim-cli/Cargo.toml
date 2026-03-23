@@ -1,0 +1,17 @@
+[package]
+name = "sim-cli"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+sim-config = { path = "../sim-config" }
+sim-core = { path = "../sim-core" }
+serde_json.workspace = true
+sim-report = { path = "../sim-report" }
+sim-runtime = { path = "../sim-runtime" }
+sim-topology = { path = "../sim-topology" }
+sim-uapi = { path = "../sim-uapi" }
+sim-workloads = { path = "../sim-workloads" }
