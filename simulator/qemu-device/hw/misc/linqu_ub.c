@@ -3,6 +3,7 @@
 #include "hw/core/irq.h"
 #include "hw/misc/linqu_ub.h"
 #include "hw/misc/linqu_ub_regs.h"
+#include "hw/misc/linqu_ub_rust_bridge.h"
 #include "migration/vmstate.h"
 #include "system/address-spaces.h"
 #include "system/dma.h"
@@ -205,9 +206,15 @@ static uint64_t linqu_ub_mmio_read(void *opaque, hwaddr addr, unsigned size)
     }
 
     if (addr == LINQU_UB_REG_VERSION) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "linqu-ub:mmio-read addr=0x%" HWADDR_PRIx " size=%u -> version=1\n",
+                      addr, size);
         return 1;
     }
     if (addr == LINQU_UB_REG_FEATURES) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "linqu-ub:mmio-read addr=0x%" HWADDR_PRIx " size=%u -> features=0\n",
+                      addr, size);
         return 0;
     }
 
@@ -266,6 +273,9 @@ static void linqu_ub_mmio_write(void *opaque, hwaddr addr, uint64_t value, unsig
     if (size != 8) {
         return;
     }
+    qemu_log_mask(LOG_GUEST_ERROR,
+                  "linqu-ub:mmio-write addr=0x%" HWADDR_PRIx " size=%u value=0x%" PRIx64 "\n",
+                  addr, size, value);
     if (!linqu_ub_decode_offset(addr, &endpoint_id, &reg)) {
         return;
     }
@@ -367,6 +377,7 @@ static void linqu_ub_realize(DeviceState *dev, Error **errp)
 {
     LinquUbState *s = LINQU_UB(dev);
     unsigned int i;
+    LinquUbBackendOps ops = { 0 };
 
     if (s->num_endpoints == 0 || s->num_endpoints > LINQU_UB_MAX_ENDPOINTS) {
         error_setg(errp, "num-endpoints must be in [1, %u]", LINQU_UB_MAX_ENDPOINTS);
@@ -375,6 +386,18 @@ static void linqu_ub_realize(DeviceState *dev, Error **errp)
     if (s->desc_bytes != LINQU_UB_DESC_BYTES) {
         error_setg(errp, "desc-bytes must currently be %u", LINQU_UB_DESC_BYTES);
         return;
+    }
+    if (s->scenario_path) {
+        s->rust_bridge = linqu_ub_rust_bridge_new(s->scenario_path);
+        if (!s->rust_bridge) {
+            error_setg(errp, "failed to create linqu-ub rust bridge");
+            return;
+        }
+        if (!linqu_ub_rust_bridge_fill_ops(s->rust_bridge, &ops)) {
+            error_setg(errp, "failed to initialize linqu-ub backend ops");
+            return;
+        }
+        linqu_ub_set_backend(s, &ops);
     }
 
     memory_region_init_io(&s->mmio, OBJECT(dev), &linqu_ub_mmio_ops, s,
@@ -390,9 +413,21 @@ static void linqu_ub_realize(DeviceState *dev, Error **errp)
     }
 }
 
+static void linqu_ub_unrealize(DeviceState *dev)
+{
+    LinquUbState *s = LINQU_UB(dev);
+
+    if (s->rust_bridge) {
+        linqu_ub_rust_bridge_free(s->rust_bridge);
+        s->rust_bridge = NULL;
+    }
+    memset(&s->backend, 0, sizeof(s->backend));
+}
+
 static const Property linqu_ub_properties[] = {
     DEFINE_PROP_UINT32("num-endpoints", LinquUbState, num_endpoints, 1),
     DEFINE_PROP_UINT32("desc-bytes", LinquUbState, desc_bytes, LINQU_UB_DESC_BYTES),
+    DEFINE_PROP_STRING("scenario-path", LinquUbState, scenario_path),
 };
 
 static void linqu_ub_class_init(ObjectClass *klass, const void *data)
@@ -400,13 +435,15 @@ static void linqu_ub_class_init(ObjectClass *klass, const void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = linqu_ub_realize;
+    dc->unrealize = linqu_ub_unrealize;
+    dc->user_creatable = true;
     device_class_set_legacy_reset(dc, linqu_ub_reset);
     device_class_set_props(dc, linqu_ub_properties);
 }
 
 static const TypeInfo linqu_ub_info = {
     .name = TYPE_LINQU_UB,
-    .parent = TYPE_SYS_BUS_DEVICE,
+    .parent = TYPE_DYNAMIC_SYS_BUS_DEVICE,
     .instance_size = sizeof(LinquUbState),
     .class_init = linqu_ub_class_init,
 };

@@ -28,6 +28,8 @@ typedef struct LinquUbEndpointState {
     uint64_t irq_status;
 } LinquUbEndpointState;
 
+typedef struct LinquUbRustBridge LinquUbRustBridge;
+
 struct LinquUbState {
     SysBusDevice parent_obj;
 
@@ -36,8 +38,10 @@ struct LinquUbState {
 
     uint32_t num_endpoints;
     uint32_t desc_bytes;
+    char *scenario_path;
 
     LinquUbBackendOps backend;
+    LinquUbRustBridge *rust_bridge;
     LinquUbEndpointState endpoints[LINQU_UB_MAX_ENDPOINTS];
 };
 
