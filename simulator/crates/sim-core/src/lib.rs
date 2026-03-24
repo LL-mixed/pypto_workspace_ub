@@ -6,6 +6,10 @@ pub type SimTimestamp = u64;
 pub type NodeId = u64;
 pub type HostId = u32;
 pub type UbpuId = u32;
+pub type UbcId = u32;
+pub type UmmuId = u32;
+pub type DecoderId = u32;
+pub type RouteId = u32;
 pub type EntityId = u32;
 pub type Eid = u32;
 pub type DomainId = u32;
@@ -14,9 +18,24 @@ pub type TaskId = u64;
 pub type OpId = u64;
 pub type SegmentId = u64;
 pub type CqId = u32;
+pub type CmdQueueId = u32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct LogicalSystemId(pub u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DecoderKind {
+    PlToNode,
+    EidToEntity,
+    SegmentToDomain,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RouteScope {
+    UbLocal,
+    HostLocal,
+    DomainShared,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PlLevel {
@@ -67,6 +86,9 @@ pub struct SegmentHandle(pub SegmentId);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CqHandle(pub CqId);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CmdQueueHandle(pub CmdQueueId);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HealthStatus {
     Healthy,
@@ -87,6 +109,15 @@ pub struct BlockPlacement {
     pub block: BlockHash,
     pub level: PlLevel,
     pub node: NodeId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RouteBinding {
+    pub id: RouteId,
+    pub scope: RouteScope,
+    pub from_node: NodeId,
+    pub to_node: NodeId,
+    pub level: PlLevel,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,11 +186,13 @@ pub struct IoSubmitReq {
     pub block: Option<BlockHash>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CompletionSource {
     ChipBackend,
     BlockService,
     ShmemService,
+    DfsService,
+    DbService,
     GuestUapi,
 }
 
@@ -207,6 +240,17 @@ pub enum SimEvent {
     CompletionObserved {
         at: SimTimestamp,
         completion: CompletionEvent,
+    },
+    RuntimeRetried {
+        at: SimTimestamp,
+        op_id: OpId,
+        reason: String,
+        attempt: u32,
+    },
+    RuntimeFailed {
+        at: SimTimestamp,
+        op_id: OpId,
+        reason: String,
     },
     FaultInjected {
         at: SimTimestamp,

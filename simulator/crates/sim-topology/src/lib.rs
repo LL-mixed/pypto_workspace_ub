@@ -1,7 +1,10 @@
 //! Topology objects for the simulator.
 
 use sim_config::{ConfigError, ScenarioConfig};
-use sim_core::{DomainId, Eid, EntityId, HealthStatus, HostId, NodeId, UbpuId};
+use sim_core::{
+    DecoderId, DecoderKind, DomainId, Eid, EntityId, HealthStatus, HostId, NodeId, PlLevel,
+    RouteBinding, RouteId, RouteScope, UbcId, UbpuId, UmmuId,
+};
 
 #[derive(Debug, Clone)]
 pub struct SimHost {
@@ -19,10 +22,38 @@ pub struct SimUbpu {
 }
 
 #[derive(Debug, Clone)]
+pub struct SimUbc {
+    pub id: UbcId,
+    pub node_id: NodeId,
+    pub ubpu_id: UbpuId,
+    pub host_id: HostId,
+    pub health: HealthStatus,
+}
+
+#[derive(Debug, Clone)]
+pub struct SimUmmu {
+    pub id: UmmuId,
+    pub node_id: NodeId,
+    pub ubc_id: UbcId,
+    pub domain_id: DomainId,
+    pub health: HealthStatus,
+}
+
+#[derive(Debug, Clone)]
 pub struct SimEntity {
     pub id: EntityId,
     pub eid: Eid,
     pub ubpu_id: UbpuId,
+    pub ubc_id: UbcId,
+    pub health: HealthStatus,
+}
+
+#[derive(Debug, Clone)]
+pub struct SimDecoder {
+    pub id: DecoderId,
+    pub node_id: NodeId,
+    pub ubc_id: UbcId,
+    pub kind: DecoderKind,
     pub health: HealthStatus,
 }
 
@@ -36,19 +67,34 @@ pub struct SimDomain {
 }
 
 #[derive(Debug, Clone)]
+pub struct SimRoute {
+    pub binding: RouteBinding,
+    pub domain_id: DomainId,
+    pub health: HealthStatus,
+}
+
+#[derive(Debug, Clone)]
 pub struct TopologySnapshot {
     pub hosts: usize,
     pub ubpus: usize,
+    pub ubcs: usize,
+    pub ummus: usize,
     pub entities: usize,
+    pub decoders: usize,
     pub domains: usize,
+    pub routes: usize,
 }
 
 #[derive(Debug, Clone)]
 pub struct SimTopology {
     pub hosts: Vec<SimHost>,
     pub ubpus: Vec<SimUbpu>,
+    pub ubcs: Vec<SimUbc>,
+    pub ummus: Vec<SimUmmu>,
     pub entities: Vec<SimEntity>,
+    pub decoders: Vec<SimDecoder>,
     pub domains: Vec<SimDomain>,
+    pub routes: Vec<SimRoute>,
 }
 
 impl SimTopology {
@@ -58,11 +104,15 @@ impl SimTopology {
         let mut next_node_id: NodeId = 1;
         let mut hosts = Vec::with_capacity(config.topology.hosts as usize);
         let mut ubpus = Vec::with_capacity((config.topology.hosts * config.topology.ubpus_per_host) as usize);
+        let mut ubcs = Vec::with_capacity((config.topology.hosts * config.topology.ubpus_per_host) as usize);
+        let mut ummus = Vec::with_capacity(config.topology.ub_domains.len());
         let mut entities = Vec::with_capacity(
             (config.topology.hosts * config.topology.ubpus_per_host * config.topology.entities_per_ubpu)
                 as usize,
         );
+        let mut decoders = Vec::with_capacity((config.topology.hosts * config.topology.ubpus_per_host * 2) as usize);
         let mut domains = Vec::with_capacity(config.topology.ub_domains.len());
+        let mut routes = Vec::new();
 
         for host_idx in 0..config.topology.hosts {
             hosts.push(SimHost {
@@ -74,8 +124,12 @@ impl SimTopology {
         }
 
         let mut next_ubpu_id: UbpuId = 0;
+        let mut next_ubc_id: UbcId = 0;
+        let mut next_ummu_id: UmmuId = 0;
         let mut next_entity_id: EntityId = 0;
         let mut next_eid: Eid = 1;
+        let mut next_decoder_id: DecoderId = 0;
+        let mut next_route_id: RouteId = 0;
 
         for host_idx in 0..config.topology.hosts {
             for _ in 0..config.topology.ubpus_per_host {
@@ -89,11 +143,43 @@ impl SimTopology {
                 next_node_id += 1;
                 next_ubpu_id += 1;
 
+                let ubc_id = next_ubc_id;
+                ubcs.push(SimUbc {
+                    id: ubc_id,
+                    node_id: next_node_id,
+                    ubpu_id,
+                    host_id: host_idx,
+                    health: HealthStatus::Healthy,
+                });
+                next_node_id += 1;
+                next_ubc_id += 1;
+
+                decoders.push(SimDecoder {
+                    id: next_decoder_id,
+                    node_id: next_node_id,
+                    ubc_id,
+                    kind: DecoderKind::PlToNode,
+                    health: HealthStatus::Healthy,
+                });
+                next_node_id += 1;
+                next_decoder_id += 1;
+
+                decoders.push(SimDecoder {
+                    id: next_decoder_id,
+                    node_id: next_node_id,
+                    ubc_id,
+                    kind: DecoderKind::EidToEntity,
+                    health: HealthStatus::Healthy,
+                });
+                next_node_id += 1;
+                next_decoder_id += 1;
+
                 for _ in 0..config.topology.entities_per_ubpu {
                     entities.push(SimEntity {
                         id: next_entity_id,
                         eid: next_eid,
                         ubpu_id,
+                        ubc_id,
                         health: HealthStatus::Healthy,
                     });
                     next_entity_id += 1;
@@ -103,21 +189,72 @@ impl SimTopology {
         }
 
         for (domain_idx, domain_cfg) in config.topology.ub_domains.iter().enumerate() {
+            let domain_id = domain_idx as DomainId;
             domains.push(SimDomain {
-                id: domain_idx as DomainId,
+                id: domain_id,
                 node_id: next_node_id,
                 label: domain_cfg.id.clone(),
                 hosts: domain_cfg.hosts.clone(),
                 health: HealthStatus::Healthy,
             });
             next_node_id += 1;
+
+            ummus.push(SimUmmu {
+                id: next_ummu_id,
+                node_id: next_node_id,
+                ubc_id: domain_cfg.hosts[0] * config.topology.ubpus_per_host,
+                domain_id,
+                health: HealthStatus::Healthy,
+            });
+            next_node_id += 1;
+            next_ummu_id += 1;
+
+            for &host_id in &domain_cfg.hosts {
+                for ubpu_index in 0..config.topology.ubpus_per_host {
+                    let ubpu_id = host_id * config.topology.ubpus_per_host + ubpu_index;
+                    let ubc_id = ubpu_id;
+                    routes.push(SimRoute {
+                        binding: RouteBinding {
+                            id: next_route_id,
+                            scope: if domain_cfg.hosts.len() == 1 {
+                                RouteScope::HostLocal
+                            } else {
+                                RouteScope::DomainShared
+                            },
+                            from_node: host_id as NodeId + 1,
+                            to_node: domains[domain_idx].node_id,
+                            level: PlLevel::L4,
+                        },
+                        domain_id,
+                        health: HealthStatus::Healthy,
+                    });
+                    next_route_id += 1;
+
+                    routes.push(SimRoute {
+                        binding: RouteBinding {
+                            id: next_route_id,
+                            scope: RouteScope::UbLocal,
+                            from_node: ubpus[ubpu_id as usize].node_id,
+                            to_node: ubcs[ubc_id as usize].node_id,
+                            level: PlLevel::L2,
+                        },
+                        domain_id,
+                        health: HealthStatus::Healthy,
+                    });
+                    next_route_id += 1;
+                }
+            }
         }
 
         Ok(Self {
             hosts,
             ubpus,
+            ubcs,
+            ummus,
             entities,
+            decoders,
             domains,
+            routes,
         })
     }
 
@@ -125,8 +262,12 @@ impl SimTopology {
         TopologySnapshot {
             hosts: self.hosts.len(),
             ubpus: self.ubpus.len(),
+            ubcs: self.ubcs.len(),
+            ummus: self.ummus.len(),
             entities: self.entities.len(),
+            decoders: self.decoders.len(),
             domains: self.domains.len(),
+            routes: self.routes.len(),
         }
     }
 }
@@ -245,7 +386,11 @@ outputs:
 
         assert_eq!(snapshot.hosts, 2);
         assert_eq!(snapshot.ubpus, 4);
+        assert_eq!(snapshot.ubcs, 4);
+        assert_eq!(snapshot.ummus, 1);
         assert_eq!(snapshot.entities, 8);
+        assert_eq!(snapshot.decoders, 8);
         assert_eq!(snapshot.domains, 1);
+        assert_eq!(snapshot.routes, 8);
     }
 }

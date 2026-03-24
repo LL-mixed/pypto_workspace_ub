@@ -130,8 +130,10 @@ dependencies = [
  "serde_json",
  "sim-config",
  "sim-core",
+ "sim-qemu",
  "sim-report",
  "sim-runtime",
+ "sim-services",
  "sim-topology",
  "sim-uapi",
  "sim-workloads",
@@ -159,8 +161,11 @@ dependencies = [
 name = "sim-qemu"
 version = "0.1.0"
 dependencies = [
+ "sim-config",
  "sim-core",
+ "sim-services",
  "sim-topology",
+ "sim-uapi",
 ]
 
 [[package]]

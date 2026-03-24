@@ -20,3 +20,7 @@ Crates:
 - `sim-workloads`
 - `sim-cli`
 
+Additional non-Rust device work:
+
+- `qemu-device`
+  Drop-in QEMU device-side source skeleton for the `linqu-ub` MMIO/ring device.
