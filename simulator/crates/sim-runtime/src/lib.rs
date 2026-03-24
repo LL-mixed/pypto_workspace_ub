@@ -1,6 +1,6 @@
 //! Runtime traits and orchestration glue.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use sim_config::ScenarioConfig;
 use sim_core::{
@@ -183,11 +183,135 @@ impl<T> SharedRuntimeQueue<T> {
     }
 }
 
+#[derive(Debug)]
+pub struct SharedRuntimeExecutor<T> {
+    queue: SharedRuntimeQueue<T>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RuntimeCompletionKey {
+    pub source: CompletionSource,
+    pub op_id: OpId,
+}
+
+#[derive(Debug)]
+pub struct RuntimeCompletionTracker<T> {
+    issued: HashMap<RuntimeCompletionKey, T>,
+}
+
+impl<T> RuntimeCompletionTracker<T> {
+    pub fn issue(&mut self, source: CompletionSource, op_id: OpId, payload: T) {
+        self.issued
+            .insert(RuntimeCompletionKey { source, op_id }, payload);
+    }
+
+    pub fn complete(&mut self, event: &CompletionEvent) -> Option<T> {
+        self.issued.remove(&RuntimeCompletionKey {
+            source: event.source,
+            op_id: event.op_id,
+        })
+    }
+}
+
+impl<T> Default for RuntimeCompletionTracker<T> {
+    fn default() -> Self {
+        Self {
+            issued: HashMap::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuntimeOpKind {
+pub enum RuntimeDriveAction<E> {
+    Complete,
+    Retry(E),
+    Fail(E),
+}
+
+impl<T> SharedRuntimeExecutor<T> {
+    pub fn with_policy(
+        issue_latency_us: SimTimestamp,
+        retry_delay_us: SimTimestamp,
+        queue_depth: usize,
+        max_retries: u32,
+    ) -> Self {
+        Self {
+            queue: SharedRuntimeQueue::with_policy(
+                issue_latency_us,
+                retry_delay_us,
+                queue_depth,
+                max_retries,
+            ),
+        }
+    }
+
+    pub fn enqueue(&mut self, payload: T, now: SimTimestamp) -> Result<(), sim_core::SimError> {
+        self.queue.enqueue(payload, now)
+    }
+
+    pub fn drain_ready(&mut self, now: SimTimestamp) -> (Vec<RuntimeQueueRecord<T>>, bool) {
+        self.queue.drain_ready(now)
+    }
+
+    pub fn retry(&mut self, entry: RuntimeQueueRecord<T>, now: SimTimestamp) -> bool {
+        self.queue.retry(entry, now)
+    }
+
+    pub fn drive_ready<E, F>(&mut self, now: SimTimestamp, mut issue: F) -> (Vec<E>, bool)
+    where
+        T: Clone,
+        F: FnMut(&RuntimeQueueRecord<T>) -> RuntimeDriveAction<E>,
+    {
+        let (ready, force_flush) = self.queue.drain_ready(now);
+        let mut failures = Vec::new();
+
+        for entry in ready {
+            match issue(&entry) {
+                RuntimeDriveAction::Complete => {}
+                RuntimeDriveAction::Retry(err) => {
+                    if !self.queue.retry(entry, now) {
+                        failures.push(err);
+                    }
+                }
+                RuntimeDriveAction::Fail(err) => failures.push(err),
+            }
+        }
+
+        (failures, force_flush)
+    }
+
+    pub fn len(&self) -> usize {
+        self.queue.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.queue.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeWorkKind {
     Dispatch,
     HostToDeviceCopy,
     DeviceToHostCopy,
+    GuestIo,
+    BlockWriteback,
+    ShmemPut,
+    ShmemGet,
+    DfsRead,
+    DfsWrite,
+    DbPut,
+    DbGet,
+}
+
+pub type RuntimeOpKind = RuntimeWorkKind;
+
+#[derive(Debug, Clone)]
+pub struct RuntimeWorkItem<T> {
+    pub op_id: OpId,
+    pub kind: RuntimeWorkKind,
+    pub task: Option<TaskKey>,
+    pub payload: T,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -219,7 +343,7 @@ pub struct LocalRuntimeEngine {
     copy_latency_us: SimTimestamp,
     timeout_us: SimTimestamp,
     max_inflight: usize,
-    max_retries: u32,
+    submission_queue: SharedRuntimeExecutor<RuntimeWorkItem<()>>,
     inflight: Vec<RuntimeOpRecord>,
     completed: VecDeque<CompletionEvent>,
 }
@@ -249,7 +373,7 @@ impl LocalRuntimeEngine {
             copy_latency_us,
             timeout_us,
             max_inflight,
-            max_retries,
+            submission_queue: SharedRuntimeExecutor::with_policy(0, 0, max_inflight, max_retries),
             inflight: Vec::new(),
             completed: VecDeque::new(),
         }
@@ -273,10 +397,19 @@ impl LocalRuntimeEngine {
             state: RuntimeOpState::Queued,
             submitted_at: self.now,
             issued_at: None,
-            ready_at: self.now + self.dispatch_latency_us,
-            timeout_at: self.now + self.timeout_us,
+            ready_at: 0,
+            timeout_at: 0,
             attempts: 0,
         });
+        self.submission_queue.enqueue(
+            RuntimeWorkItem {
+                op_id,
+                kind: RuntimeWorkKind::Dispatch,
+                task: Some(req.task.clone()),
+                payload: (),
+            },
+            self.now,
+        )?;
         sink.emit(SimEvent::DispatchSubmitted { at: self.now, req });
         Ok(DispatchHandle(op_id))
     }
@@ -284,6 +417,7 @@ impl LocalRuntimeEngine {
     pub fn submit_copy(&mut self, req: CopyRequest) -> Result<TransferHandle, sim_core::SimError> {
         self.ensure_capacity()?;
         let op_id = self.next_op();
+        let task = req.task.clone();
         let kind = match req.direction {
             CopyDirection::HostToDevice => RuntimeOpKind::HostToDeviceCopy,
             CopyDirection::DeviceToHost => RuntimeOpKind::DeviceToHostCopy,
@@ -291,14 +425,23 @@ impl LocalRuntimeEngine {
         self.inflight.push(RuntimeOpRecord {
             op_id,
             kind,
-            task: req.task,
+            task,
             state: RuntimeOpState::Queued,
             submitted_at: self.now,
             issued_at: None,
-            ready_at: self.now + self.copy_latency_us,
-            timeout_at: self.now + self.timeout_us,
+            ready_at: 0,
+            timeout_at: 0,
             attempts: 0,
         });
+        self.submission_queue.enqueue(
+            RuntimeWorkItem {
+                op_id,
+                kind,
+                task: Some(req.task),
+                payload: (),
+            },
+            self.now,
+        )?;
         Ok(TransferHandle(op_id))
     }
 
@@ -308,11 +451,28 @@ impl LocalRuntimeEngine {
         let copy_latency_us = self.copy_latency_us;
         let timeout_us = self.timeout_us;
 
-        for op in &mut self.inflight {
-            if op.state == RuntimeOpState::Queued && op.submitted_at <= now {
+        let _ = self.submission_queue.drive_ready(now, |ready| {
+            if let Some(op) = self
+                .inflight
+                .iter_mut()
+                .find(|op| op.op_id == ready.payload.op_id && op.state == RuntimeOpState::Queued)
+            {
                 op.state = RuntimeOpState::Issued;
                 op.issued_at = Some(now);
+                let latency = match op.kind {
+                    RuntimeOpKind::Dispatch => dispatch_latency_us,
+                    RuntimeOpKind::HostToDeviceCopy | RuntimeOpKind::DeviceToHostCopy => {
+                        copy_latency_us
+                    }
+                    _ => 0,
+                };
+                op.ready_at = op.submitted_at + latency;
+                op.timeout_at = op.submitted_at + timeout_us;
             }
+            RuntimeDriveAction::<()>::Complete
+        });
+
+        for op in &mut self.inflight {
             if op.state == RuntimeOpState::Issued && op.ready_at <= now {
                 op.state = RuntimeOpState::Completed;
                 let completion = CompletionEvent {
@@ -331,19 +491,23 @@ impl LocalRuntimeEngine {
             }
 
             if op.state == RuntimeOpState::Issued && op.timeout_at <= now {
-                if op.attempts < self.max_retries {
+                let retry_entry = RuntimeQueueRecord {
+                    payload: RuntimeWorkItem {
+                        op_id: op.op_id,
+                        kind: op.kind,
+                        task: Some(op.task.clone()),
+                        payload: (),
+                    },
+                    ready_at: now,
+                    attempts: op.attempts,
+                };
+                if self.submission_queue.retry(retry_entry, now) {
                     op.attempts += 1;
                     op.state = RuntimeOpState::Queued;
                     op.submitted_at = now;
                     op.issued_at = None;
-                    let latency = match op.kind {
-                        RuntimeOpKind::Dispatch => dispatch_latency_us,
-                        RuntimeOpKind::HostToDeviceCopy | RuntimeOpKind::DeviceToHostCopy => {
-                            copy_latency_us
-                        }
-                    };
-                    op.ready_at = now + latency;
-                    op.timeout_at = now + timeout_us;
+                    op.ready_at = 0;
+                    op.timeout_at = 0;
                     sink.emit(SimEvent::RuntimeRetried {
                         at: now,
                         op_id: op.op_id,
@@ -577,14 +741,14 @@ impl SimBlockStore for InMemoryBlockStore {
 mod tests {
     use super::{
         EvictionPlan, InMemoryBlockStore, LocalRuntimeEngine, PromotionPlan, RecursiveRoutePlanner,
-        RoutePlanner, RouteRequest, RuntimeOpKind, RuntimeOpState, SharedRuntimeQueue,
-        SimBlockStore, VecEventSink,
+        RoutePlanner, RouteRequest, RuntimeCompletionTracker, RuntimeOpKind, RuntimeOpState,
+        SharedRuntimeQueue, SimBlockStore, VecEventSink,
     };
     use sim_config::ScenarioConfig;
     use sim_core::{
-        BlockHash, CompletionStatus, CopyDirection, CopyRequest, DispatchRequest, FunctionLabel,
-        HierarchyCoord, LogicalSystemId, MemoryEndpoint, PlLevel, SegmentHandle, SimEvent,
-        TaskKey,
+        BlockHash, CompletionEvent, CompletionSource, CompletionStatus, CopyDirection,
+        CopyRequest, DispatchRequest, FunctionLabel, HierarchyCoord, LogicalSystemId,
+        MemoryEndpoint, PlLevel, SegmentHandle, SimEvent, TaskKey,
     };
     use sim_topology::SimTopology;
 
@@ -963,5 +1127,20 @@ outputs:
         let (ready, _) = queue.drain_ready(15);
         let entry = ready.into_iter().next().expect("retried entry");
         assert!(!queue.retry(entry, 15));
+    }
+
+    #[test]
+    fn completion_tracker_round_trips_payload() {
+        let mut tracker = RuntimeCompletionTracker::default();
+        tracker.issue(CompletionSource::ChipBackend, 7, "payload");
+        let event = CompletionEvent {
+            op_id: 7,
+            task: None,
+            source: CompletionSource::ChipBackend,
+            status: CompletionStatus::Success,
+            finished_at: 10,
+        };
+        assert_eq!(tracker.complete(&event), Some("payload"));
+        assert_eq!(tracker.complete(&event), None);
     }
 }

@@ -12,7 +12,10 @@ use sim_services::{
     dfs::{DfsReadReq, DfsServiceProfile, DfsServiceStub, DfsWriteReq},
     shmem::{ShmemGetReq, ShmemPutReq, ShmemServiceProfile, ShmemServiceStub},
 };
-use sim_runtime::{RuntimeQueueRecord, SharedRuntimeQueue};
+use sim_runtime::{
+    RuntimeCompletionTracker, RuntimeDriveAction, RuntimeQueueRecord, RuntimeWorkItem,
+    RuntimeWorkKind, SharedRuntimeExecutor,
+};
 use sim_topology::{SimTopology, TopologySnapshot};
 
 #[derive(Debug, Clone)]
@@ -112,10 +115,14 @@ pub struct LocalGuestUapiSurface {
     next_cq_id: u32,
     next_cmdq_id: u32,
     service_clock: u64,
+    runtime_issue_latency_us: u64,
+    runtime_retry_delay_us: u64,
+    runtime_queue_depth: usize,
+    runtime_max_retries: u32,
     cq_events: HashMap<CqHandle, CompletionQueueState>,
     cmd_queues: HashMap<CmdQueueHandle, CommandQueueState>,
-    runtime_queue: SharedRuntimeQueue<UapiRuntimePayload>,
-    pending_routes: HashMap<PendingRouteKey, CqHandle>,
+    runtime_queue: SharedRuntimeExecutor<RuntimeWorkItem<UapiRuntimePayload>>,
+    completion_routes: RuntimeCompletionTracker<CqHandle>,
 }
 
 #[derive(Debug)]
@@ -138,10 +145,10 @@ struct UapiRuntimePayload {
     desc: UapiDescriptor,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct PendingRouteKey {
-    source: CompletionSource,
-    op_id: u64,
+#[derive(Debug, Clone, Copy)]
+struct UapiRuntimeFailure {
+    cq: CqHandle,
+    code: &'static str,
 }
 
 impl LocalGuestUapiSurface {
@@ -182,10 +189,14 @@ impl LocalGuestUapiSurface {
             next_cq_id: 0,
             next_cmdq_id: 0,
             service_clock: 0,
+            runtime_issue_latency_us: 4,
+            runtime_retry_delay_us: 5,
+            runtime_queue_depth: 32,
+            runtime_max_retries: 1,
             cq_events: HashMap::new(),
             cmd_queues: HashMap::new(),
-            runtime_queue: SharedRuntimeQueue::with_policy(4, 5, 32, 1),
-            pending_routes: HashMap::new(),
+            runtime_queue: SharedRuntimeExecutor::with_policy(4, 5, 32, 1),
+            completion_routes: RuntimeCompletionTracker::default(),
         }
     }
 
@@ -218,8 +229,18 @@ impl LocalGuestUapiSurface {
         desc: UapiDescriptor,
     ) -> Result<(), SimError> {
         let now = self.next_service_time();
+        let kind = runtime_kind_for_descriptor(&desc);
+        let task = runtime_task_for_descriptor(&desc);
         self.runtime_queue
-            .enqueue(UapiRuntimePayload { cq, desc }, now)
+            .enqueue(
+                RuntimeWorkItem {
+                    op_id: now,
+                    kind,
+                    task,
+                    payload: UapiRuntimePayload { cq, desc },
+                },
+                now,
+            )
             .map_err(|err| match err {
                 SimError::InvalidInput("runtime queue full") => {
                     SimError::InvalidInput("uapi runtime queue full")
@@ -245,43 +266,66 @@ impl LocalGuestUapiSurface {
     }
 
     fn flush_runtime(&mut self, now: u64) -> Result<(), SimError> {
-        let (ready, force_flush) = self.runtime_queue.drain_ready(now);
+        let mut runtime_queue = std::mem::replace(
+            &mut self.runtime_queue,
+            SharedRuntimeExecutor::with_policy(
+                self.runtime_issue_latency_us,
+                self.runtime_retry_delay_us,
+                self.runtime_queue_depth,
+                self.runtime_max_retries,
+            ),
+        );
 
-        for entry in ready {
+        let (failures, force_flush) = runtime_queue.drive_ready(now, |entry| {
             let RuntimeQueueRecord {
-                payload: UapiRuntimePayload { cq, desc },
+                payload:
+                    RuntimeWorkItem {
+                        payload: UapiRuntimePayload { cq, desc },
+                        ..
+                    },
                 ..
-            } = entry.clone();
-            match self.submit_descriptor_to_cq(desc.clone(), cq) {
-                Ok(_) => {}
+            } = entry;
+            match self.submit_descriptor_to_cq(desc.clone(), *cq) {
+                Ok(_) => RuntimeDriveAction::Complete,
                 Err(SimError::InvalidInput(code))
                     if matches!(
-                        code,
+                        code.as_ref(),
                         "block queue full" | "shmem queue full" | "dfs queue full" | "db queue full"
                     ) =>
                 {
                     if now == u64::MAX {
-                        self.flush_services(now)?;
+                        let _ = self.flush_services(now);
                     }
-                    if self.runtime_queue.retry(entry, now) {
-                    } else {
-                        let op_id = self.next_service_time();
-                        self.enqueue_to_cq(
-                            cq,
-                            CompletionEvent {
-                                op_id,
-                                task: None,
-                                source: CompletionSource::GuestUapi,
-                                status: CompletionStatus::RetryableFailure {
-                                    code: format!("runtime_exhausted_{code}"),
-                                },
-                                finished_at: now,
-                            },
-                        )?;
-                    }
+                    RuntimeDriveAction::Retry(UapiRuntimeFailure {
+                        cq: *cq,
+                        code,
+                    })
                 }
-                Err(err) => return Err(err),
+                Err(err) => RuntimeDriveAction::Fail(UapiRuntimeFailure {
+                    cq: *cq,
+                    code: match err {
+                        SimError::InvalidInput(code) => code,
+                        _ => "runtime_issue_failed",
+                    },
+                }),
             }
+        });
+        self.runtime_queue = runtime_queue;
+
+        for failure in failures {
+            let op_id = self.next_service_time();
+            self.enqueue_to_cq(
+                failure.cq,
+                CompletionEvent {
+                    op_id,
+                    task: None,
+                    source: CompletionSource::GuestUapi,
+                    status: CompletionStatus::RetryableFailure {
+                        code: format!("runtime_exhausted_{}", failure.code),
+                    },
+                    finished_at: now,
+                },
+            )?;
         }
 
         if force_flush && !self.runtime_queue.is_empty() {
@@ -291,21 +335,16 @@ impl LocalGuestUapiSurface {
     }
 
     fn route_completion_to_cq(&mut self, event: CompletionEvent) -> Result<(), SimError> {
-        let key = PendingRouteKey {
-            source: event.source,
-            op_id: event.op_id,
-        };
         let cq = self
-            .pending_routes
-            .remove(&key)
+            .completion_routes
+            .complete(&event)
             .or_else(|| self.default_cq().ok())
             .ok_or(SimError::NotFound("completion queue"))?;
         self.enqueue_to_cq(cq, event)
     }
 
     fn bind_completion_route(&mut self, source: CompletionSource, op_id: u64, cq: CqHandle) {
-        self.pending_routes
-            .insert(PendingRouteKey { source, op_id }, cq);
+        self.completion_routes.issue(source, op_id, cq);
     }
 
     fn create_cmd_queue(
@@ -603,7 +642,7 @@ impl LocalGuestUapiSurface {
         );
         Ok(cq)
     }
-    fn submit_io_to_cq(&mut self, req: IoSubmitReq, cq: CqHandle) -> Result<u64, SimError> {
+fn submit_io_to_cq(&mut self, req: IoSubmitReq, cq: CqHandle) -> Result<u64, SimError> {
         match req.opcode {
             IoOpcode::ReadBlock => {
                 let block = req.block.ok_or(SimError::InvalidInput("missing block hash"))?;
@@ -643,6 +682,32 @@ impl LocalGuestUapiSurface {
                 Ok(req.op_id)
             }
         }
+    }
+}
+
+fn runtime_kind_for_descriptor(desc: &UapiDescriptor) -> RuntimeWorkKind {
+    match desc {
+        UapiDescriptor::Io(_) => RuntimeWorkKind::GuestIo,
+        UapiDescriptor::BlockWriteback { .. } => RuntimeWorkKind::BlockWriteback,
+        UapiDescriptor::ShmemPut(_) => RuntimeWorkKind::ShmemPut,
+        UapiDescriptor::ShmemGet(_) => RuntimeWorkKind::ShmemGet,
+        UapiDescriptor::DfsRead(_) => RuntimeWorkKind::DfsRead,
+        UapiDescriptor::DfsWrite(_) => RuntimeWorkKind::DfsWrite,
+        UapiDescriptor::DbPut(_) => RuntimeWorkKind::DbPut,
+        UapiDescriptor::DbGet(_) => RuntimeWorkKind::DbGet,
+    }
+}
+
+fn runtime_task_for_descriptor(desc: &UapiDescriptor) -> Option<TaskKey> {
+    match desc {
+        UapiDescriptor::Io(req) => req.task.clone(),
+        UapiDescriptor::BlockWriteback { task, .. } => task.clone(),
+        UapiDescriptor::ShmemPut(req) => req.task.clone(),
+        UapiDescriptor::ShmemGet(req) => req.task.clone(),
+        UapiDescriptor::DfsRead(req) => req.task.clone(),
+        UapiDescriptor::DfsWrite(req) => req.task.clone(),
+        UapiDescriptor::DbPut(req) => req.task.clone(),
+        UapiDescriptor::DbGet(req) => req.task.clone(),
     }
 }
 
