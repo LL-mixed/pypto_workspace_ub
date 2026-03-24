@@ -4,9 +4,9 @@ use std::collections::{HashSet, VecDeque};
 
 use sim_config::ScenarioConfig;
 use sim_core::{
-    BlockHash, BlockPlacement, CompletionEvent, CopyRequest, DispatchHandle, DispatchRequest,
-    PlLevel, RouteDecision, RouteReason, ServiceOpHandle, SimEvent, SimTimestamp, TaskKey,
-    TransferHandle,
+    BlockHash, BlockPlacement, CompletionEvent, CompletionSource, CompletionStatus, CopyDirection,
+    CopyRequest, DispatchHandle, DispatchRequest, OpId, PlLevel, RouteDecision, RouteReason,
+    ServiceOpHandle, SimEvent, SimTimestamp, TaskKey, TransferHandle,
 };
 use sim_topology::SimTopology;
 
@@ -97,6 +97,312 @@ pub trait RingRuntime {
     fn on_scope_enter(&mut self, task: &TaskKey);
     fn on_scope_exit(&mut self, task: &TaskKey);
     fn on_pl_free(&mut self, task: &TaskKey, block: &BlockHash);
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeQueueRecord<T> {
+    pub payload: T,
+    pub ready_at: SimTimestamp,
+    pub attempts: u32,
+}
+
+#[derive(Debug)]
+pub struct SharedRuntimeQueue<T> {
+    issue_latency_us: SimTimestamp,
+    retry_delay_us: SimTimestamp,
+    queue_depth: usize,
+    max_retries: u32,
+    pending: VecDeque<RuntimeQueueRecord<T>>,
+}
+
+impl<T> SharedRuntimeQueue<T> {
+    pub fn with_policy(
+        issue_latency_us: SimTimestamp,
+        retry_delay_us: SimTimestamp,
+        queue_depth: usize,
+        max_retries: u32,
+    ) -> Self {
+        Self {
+            issue_latency_us,
+            retry_delay_us,
+            queue_depth,
+            max_retries,
+            pending: VecDeque::new(),
+        }
+    }
+
+    pub fn enqueue(&mut self, payload: T, now: SimTimestamp) -> Result<(), sim_core::SimError> {
+        if self.pending.len() >= self.queue_depth {
+            return Err(sim_core::SimError::InvalidInput("runtime queue full"));
+        }
+        self.pending.push_back(RuntimeQueueRecord {
+            payload,
+            ready_at: now.saturating_add(self.issue_latency_us),
+            attempts: 0,
+        });
+        Ok(())
+    }
+
+    pub fn drain_ready(&mut self, now: SimTimestamp) -> (Vec<RuntimeQueueRecord<T>>, bool) {
+        let mut ready = Vec::new();
+        let mut deferred = VecDeque::new();
+        let force_flush = now == u64::MAX;
+
+        while let Some(entry) = self.pending.pop_front() {
+            if !force_flush && entry.ready_at > now {
+                deferred.push_back(entry);
+                continue;
+            }
+            ready.push(entry);
+        }
+
+        self.pending = deferred;
+        (ready, force_flush)
+    }
+
+    pub fn retry(&mut self, mut entry: RuntimeQueueRecord<T>, now: SimTimestamp) -> bool {
+        if entry.attempts >= self.max_retries {
+            return false;
+        }
+        entry.attempts += 1;
+        entry.ready_at = if now == u64::MAX {
+            now
+        } else {
+            now.saturating_add(self.retry_delay_us)
+        };
+        self.pending.push_back(entry);
+        true
+    }
+
+    pub fn len(&self) -> usize {
+        self.pending.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.pending.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeOpKind {
+    Dispatch,
+    HostToDeviceCopy,
+    DeviceToHostCopy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeOpState {
+    Queued,
+    Issued,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeOpRecord {
+    pub op_id: OpId,
+    pub kind: RuntimeOpKind,
+    pub task: TaskKey,
+    pub state: RuntimeOpState,
+    pub submitted_at: SimTimestamp,
+    pub issued_at: Option<SimTimestamp>,
+    pub ready_at: SimTimestamp,
+    pub timeout_at: SimTimestamp,
+    pub attempts: u32,
+}
+
+#[derive(Debug)]
+pub struct LocalRuntimeEngine {
+    now: SimTimestamp,
+    next_op_id: OpId,
+    dispatch_latency_us: SimTimestamp,
+    copy_latency_us: SimTimestamp,
+    timeout_us: SimTimestamp,
+    max_inflight: usize,
+    max_retries: u32,
+    inflight: Vec<RuntimeOpRecord>,
+    completed: VecDeque<CompletionEvent>,
+}
+
+impl LocalRuntimeEngine {
+    pub fn from_config(config: &ScenarioConfig) -> Self {
+        Self::with_policy(
+            config.pypto.simpler_boundary.dispatch_latency_us.unwrap_or(1),
+            config.levels.l3_host_tier.fetch_latency_us.unwrap_or(1),
+            config.levels.l4_domain_tier.fetch_latency_us.unwrap_or(80),
+            (config.topology.hosts * config.topology.ubpus_per_host) as usize,
+            1,
+        )
+    }
+
+    pub fn with_policy(
+        dispatch_latency_us: SimTimestamp,
+        copy_latency_us: SimTimestamp,
+        timeout_us: SimTimestamp,
+        max_inflight: usize,
+        max_retries: u32,
+    ) -> Self {
+        Self {
+            now: 0,
+            next_op_id: 0,
+            dispatch_latency_us,
+            copy_latency_us,
+            timeout_us,
+            max_inflight,
+            max_retries,
+            inflight: Vec::new(),
+            completed: VecDeque::new(),
+        }
+    }
+
+    pub fn now(&self) -> SimTimestamp {
+        self.now
+    }
+
+    pub fn submit_dispatch(
+        &mut self,
+        req: DispatchRequest,
+        sink: &mut dyn EventSink,
+    ) -> Result<DispatchHandle, sim_core::SimError> {
+        self.ensure_capacity()?;
+        let op_id = self.next_op();
+        self.inflight.push(RuntimeOpRecord {
+            op_id,
+            kind: RuntimeOpKind::Dispatch,
+            task: req.task.clone(),
+            state: RuntimeOpState::Queued,
+            submitted_at: self.now,
+            issued_at: None,
+            ready_at: self.now + self.dispatch_latency_us,
+            timeout_at: self.now + self.timeout_us,
+            attempts: 0,
+        });
+        sink.emit(SimEvent::DispatchSubmitted { at: self.now, req });
+        Ok(DispatchHandle(op_id))
+    }
+
+    pub fn submit_copy(&mut self, req: CopyRequest) -> Result<TransferHandle, sim_core::SimError> {
+        self.ensure_capacity()?;
+        let op_id = self.next_op();
+        let kind = match req.direction {
+            CopyDirection::HostToDevice => RuntimeOpKind::HostToDeviceCopy,
+            CopyDirection::DeviceToHost => RuntimeOpKind::DeviceToHostCopy,
+        };
+        self.inflight.push(RuntimeOpRecord {
+            op_id,
+            kind,
+            task: req.task,
+            state: RuntimeOpState::Queued,
+            submitted_at: self.now,
+            issued_at: None,
+            ready_at: self.now + self.copy_latency_us,
+            timeout_at: self.now + self.timeout_us,
+            attempts: 0,
+        });
+        Ok(TransferHandle(op_id))
+    }
+
+    pub fn advance_to(&mut self, now: SimTimestamp, sink: &mut dyn EventSink) {
+        self.now = now;
+        let dispatch_latency_us = self.dispatch_latency_us;
+        let copy_latency_us = self.copy_latency_us;
+        let timeout_us = self.timeout_us;
+
+        for op in &mut self.inflight {
+            if op.state == RuntimeOpState::Queued && op.submitted_at <= now {
+                op.state = RuntimeOpState::Issued;
+                op.issued_at = Some(now);
+            }
+            if op.state == RuntimeOpState::Issued && op.ready_at <= now {
+                op.state = RuntimeOpState::Completed;
+                let completion = CompletionEvent {
+                    op_id: op.op_id,
+                    task: Some(op.task.clone()),
+                    source: CompletionSource::ChipBackend,
+                    status: CompletionStatus::Success,
+                    finished_at: op.ready_at,
+                };
+                sink.emit(SimEvent::CompletionObserved {
+                    at: completion.finished_at,
+                    completion: completion.clone(),
+                });
+                self.completed.push_back(completion);
+                continue;
+            }
+
+            if op.state == RuntimeOpState::Issued && op.timeout_at <= now {
+                if op.attempts < self.max_retries {
+                    op.attempts += 1;
+                    op.state = RuntimeOpState::Queued;
+                    op.submitted_at = now;
+                    op.issued_at = None;
+                    let latency = match op.kind {
+                        RuntimeOpKind::Dispatch => dispatch_latency_us,
+                        RuntimeOpKind::HostToDeviceCopy | RuntimeOpKind::DeviceToHostCopy => {
+                            copy_latency_us
+                        }
+                    };
+                    op.ready_at = now + latency;
+                    op.timeout_at = now + timeout_us;
+                    sink.emit(SimEvent::RuntimeRetried {
+                        at: now,
+                        op_id: op.op_id,
+                        reason: "timeout".to_string(),
+                        attempt: op.attempts,
+                    });
+                } else {
+                    op.state = RuntimeOpState::Failed;
+                    let completion = CompletionEvent {
+                        op_id: op.op_id,
+                        task: Some(op.task.clone()),
+                        source: CompletionSource::ChipBackend,
+                        status: CompletionStatus::FatalFailure {
+                            code: "timeout_exhausted".to_string(),
+                        },
+                        finished_at: now,
+                    };
+                    sink.emit(SimEvent::RuntimeFailed {
+                        at: now,
+                        op_id: op.op_id,
+                        reason: "timeout_exhausted".to_string(),
+                    });
+                    sink.emit(SimEvent::CompletionObserved {
+                        at: completion.finished_at,
+                        completion: completion.clone(),
+                    });
+                    self.completed.push_back(completion);
+                }
+            }
+        }
+
+        self.inflight
+            .retain(|op| !matches!(op.state, RuntimeOpState::Completed | RuntimeOpState::Failed));
+    }
+
+    pub fn poll_completions(
+        &mut self,
+        now: SimTimestamp,
+        sink: &mut dyn EventSink,
+    ) -> Vec<CompletionEvent> {
+        self.advance_to(now, sink);
+        self.completed.drain(..).collect()
+    }
+
+    pub fn inflight(&self) -> &[RuntimeOpRecord] {
+        &self.inflight
+    }
+
+    fn next_op(&mut self) -> OpId {
+        self.next_op_id += 1;
+        self.next_op_id
+    }
+
+    fn ensure_capacity(&self) -> Result<(), sim_core::SimError> {
+        if self.inflight.len() >= self.max_inflight {
+            return Err(sim_core::SimError::InvalidInput("runtime queue full"));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -270,11 +576,16 @@ impl SimBlockStore for InMemoryBlockStore {
 #[cfg(test)]
 mod tests {
     use super::{
-        EvictionPlan, InMemoryBlockStore, PromotionPlan, RecursiveRoutePlanner, RoutePlanner,
-        RouteRequest, SimBlockStore,
+        EvictionPlan, InMemoryBlockStore, LocalRuntimeEngine, PromotionPlan, RecursiveRoutePlanner,
+        RoutePlanner, RouteRequest, RuntimeOpKind, RuntimeOpState, SharedRuntimeQueue,
+        SimBlockStore, VecEventSink,
     };
     use sim_config::ScenarioConfig;
-    use sim_core::{BlockHash, HierarchyCoord, LogicalSystemId, PlLevel, TaskKey};
+    use sim_core::{
+        BlockHash, CompletionStatus, CopyDirection, CopyRequest, DispatchRequest, FunctionLabel,
+        HierarchyCoord, LogicalSystemId, MemoryEndpoint, PlLevel, SegmentHandle, SimEvent,
+        TaskKey,
+    };
     use sim_topology::SimTopology;
 
     const VALID_YAML: &str = r#"
@@ -442,5 +753,215 @@ outputs:
         let config = ScenarioConfig::from_yaml_str(VALID_YAML).expect("valid config");
         let store = InMemoryBlockStore::from_config(&config);
         assert_eq!(store.capacity_blocks(), 1024);
+    }
+
+    #[test]
+    fn runtime_engine_advances_dispatch_to_completion() {
+        let config = ScenarioConfig::from_yaml_str(VALID_YAML).expect("valid config");
+        let mut runtime = LocalRuntimeEngine::from_config(&config);
+        let mut sink = VecEventSink::default();
+
+        let handle = runtime
+            .submit_dispatch(
+                DispatchRequest {
+                    task: test_task(),
+                    function: FunctionLabel {
+                        name: "decode_step".into(),
+                        level: PlLevel::L4,
+                    },
+                    target_level: PlLevel::L4,
+                    target_node: 19,
+                    input_segments: vec![SegmentHandle(1)],
+                },
+                &mut sink,
+            )
+            .expect("dispatch submit");
+
+        assert_eq!(handle.0, 1);
+        assert_eq!(runtime.inflight().len(), 1);
+        assert_eq!(runtime.inflight()[0].kind, RuntimeOpKind::Dispatch);
+        assert_eq!(runtime.inflight()[0].state, RuntimeOpState::Queued);
+        assert_eq!(runtime.inflight()[0].attempts, 0);
+
+        runtime.advance_to(1, &mut sink);
+        assert_eq!(runtime.inflight()[0].state, RuntimeOpState::Issued);
+
+        let completions = runtime.poll_completions(15, &mut sink);
+        assert_eq!(completions.len(), 1);
+        assert_eq!(completions[0].op_id, 1);
+        assert!(runtime.inflight().is_empty());
+        assert!(!sink.into_events().is_empty());
+    }
+
+    #[test]
+    fn runtime_engine_uses_copy_latency_from_config() {
+        let config = ScenarioConfig::from_yaml_str(VALID_YAML).expect("valid config");
+        let mut runtime = LocalRuntimeEngine::from_config(&config);
+        let mut sink = VecEventSink::default();
+
+        let handle = runtime
+            .submit_copy(CopyRequest {
+                task: test_task(),
+                direction: CopyDirection::HostToDevice,
+                bytes: 4096,
+                src: MemoryEndpoint {
+                    node: 1,
+                    segment: SegmentHandle(1),
+                    offset: 0,
+                },
+                dst: MemoryEndpoint {
+                    node: 3,
+                    segment: SegmentHandle(2),
+                    offset: 0,
+                },
+            })
+            .expect("copy submit");
+
+        assert_eq!(handle.0, 1);
+        runtime.advance_to(29, &mut sink);
+        assert_eq!(runtime.inflight()[0].state, RuntimeOpState::Issued);
+
+        let completions = runtime.poll_completions(30, &mut sink);
+        assert_eq!(completions.len(), 1);
+        assert_eq!(completions[0].finished_at, 30);
+    }
+
+    #[test]
+    fn runtime_engine_retries_on_timeout_before_success() {
+        let mut runtime = LocalRuntimeEngine::with_policy(15, 30, 5, 4, 3);
+        let mut sink = VecEventSink::default();
+
+        runtime
+            .submit_dispatch(
+                DispatchRequest {
+                    task: test_task(),
+                    function: FunctionLabel {
+                        name: "decode_step".into(),
+                        level: PlLevel::L4,
+                    },
+                    target_level: PlLevel::L4,
+                    target_node: 19,
+                    input_segments: vec![SegmentHandle(1)],
+                },
+                &mut sink,
+            )
+            .expect("dispatch submit");
+
+        runtime.advance_to(5, &mut sink);
+        assert_eq!(runtime.inflight()[0].state, RuntimeOpState::Queued);
+        assert_eq!(runtime.inflight()[0].attempts, 1);
+
+        let events = sink.into_events();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            SimEvent::RuntimeRetried {
+                op_id: 1,
+                attempt: 1,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn runtime_engine_fails_after_retry_budget_exhausted() {
+        let mut runtime = LocalRuntimeEngine::with_policy(15, 30, 5, 4, 0);
+        let mut sink = VecEventSink::default();
+
+        runtime
+            .submit_dispatch(
+                DispatchRequest {
+                    task: test_task(),
+                    function: FunctionLabel {
+                        name: "decode_step".into(),
+                        level: PlLevel::L4,
+                    },
+                    target_level: PlLevel::L4,
+                    target_node: 19,
+                    input_segments: vec![SegmentHandle(1)],
+                },
+                &mut sink,
+            )
+            .expect("dispatch submit");
+
+        let completions = runtime.poll_completions(5, &mut sink);
+        assert_eq!(completions.len(), 1);
+        assert_eq!(
+            completions[0].status,
+            CompletionStatus::FatalFailure {
+                code: "timeout_exhausted".into()
+            }
+        );
+
+        let events = sink.into_events();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            SimEvent::RuntimeFailed { op_id: 1, .. }
+        )));
+    }
+
+    #[test]
+    fn runtime_engine_rejects_submit_when_queue_is_full() {
+        let mut runtime = LocalRuntimeEngine::with_policy(15, 30, 80, 1, 1);
+        let mut sink = VecEventSink::default();
+
+        runtime
+            .submit_dispatch(
+                DispatchRequest {
+                    task: test_task(),
+                    function: FunctionLabel {
+                        name: "decode_step".into(),
+                        level: PlLevel::L4,
+                    },
+                    target_level: PlLevel::L4,
+                    target_node: 19,
+                    input_segments: vec![SegmentHandle(1)],
+                },
+                &mut sink,
+            )
+            .expect("dispatch submit");
+
+        let err = runtime
+            .submit_copy(CopyRequest {
+                task: test_task(),
+                direction: CopyDirection::HostToDevice,
+                bytes: 4096,
+                src: MemoryEndpoint {
+                    node: 1,
+                    segment: SegmentHandle(1),
+                    offset: 0,
+                },
+                dst: MemoryEndpoint {
+                    node: 3,
+                    segment: SegmentHandle(2),
+                    offset: 0,
+                },
+            })
+            .expect_err("queue full");
+
+        assert!(matches!(
+            err,
+            sim_core::SimError::InvalidInput("runtime queue full")
+        ));
+    }
+
+    #[test]
+    fn shared_runtime_queue_retries_then_exhausts() {
+        let mut queue = SharedRuntimeQueue::with_policy(2, 3, 4, 1);
+        queue.enqueue("job", 10).expect("enqueue");
+
+        let (ready, force_flush) = queue.drain_ready(11);
+        assert!(!force_flush);
+        assert!(ready.is_empty());
+
+        let (ready, _) = queue.drain_ready(12);
+        let entry = ready.into_iter().next().expect("ready entry");
+        assert!(queue.retry(entry, 12));
+
+        let (ready, _) = queue.drain_ready(14);
+        assert!(ready.is_empty());
+
+        let (ready, _) = queue.drain_ready(15);
+        let entry = ready.into_iter().next().expect("retried entry");
+        assert!(!queue.retry(entry, 15));
     }
 }
