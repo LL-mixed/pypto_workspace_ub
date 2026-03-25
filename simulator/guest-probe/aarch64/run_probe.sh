@@ -11,6 +11,7 @@ RUN_SECS="${RUN_SECS:-2}"
 QEMU_DEBUG_FLAGS="${QEMU_DEBUG_FLAGS:-}"
 QEMU_DEBUG_LOG="${QEMU_DEBUG_LOG:-$ROOT_DIR/out/linqu_ub_probe.qemu.log}"
 MACHINE="${MACHINE:-virt}"
+EXTRA_QEMU_ARGS="${EXTRA_QEMU_ARGS:-}"
 
 bash "$ROOT_DIR/build_probe.sh" >/dev/null
 
@@ -54,6 +55,10 @@ debug_args=()
 if [[ -n "$QEMU_DEBUG_FLAGS" ]]; then
   debug_args=(${=QEMU_DEBUG_FLAGS} -D "$QEMU_DEBUG_LOG")
 fi
+extra_args=()
+if [[ -n "$EXTRA_QEMU_ARGS" ]]; then
+  extra_args=(${=EXTRA_QEMU_ARGS})
+fi
 
 ./build/qemu-system-aarch64 \
   -M "$MACHINE" \
@@ -64,6 +69,7 @@ fi
   -monitor none \
   -serial stdio \
   "${debug_args[@]}" \
+  "${extra_args[@]}" \
   -device "linqu-ub,scenario-path=$SCENARIO" \
   -device "loader,file=$BIN,addr=$LOAD_ADDR,cpu-num=0,force-raw=on" \
   >"$LOG_FILE" 2>&1 &

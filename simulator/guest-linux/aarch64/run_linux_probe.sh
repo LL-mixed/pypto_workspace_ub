@@ -15,6 +15,7 @@ MACHINE="${MACHINE:-virt}"
 QEMU_DEBUG_FLAGS="${QEMU_DEBUG_FLAGS:-}"
 QEMU_DEBUG_LOG="${QEMU_DEBUG_LOG:-$OUT_DIR/linux_probe.qemu.log}"
 EXTRA_QEMU_ARGS="${EXTRA_QEMU_ARGS:-}"
+APPEND_EXTRA="${APPEND_EXTRA:-}"
 
 : "${KERNEL_IMAGE:=$DEFAULT_KERNEL_IMAGE}"
 : "${INITRAMFS_IMAGE:=$DEFAULT_INITRAMFS_IMAGE}"
@@ -85,7 +86,7 @@ cd "$QEMU_DIR"
   -device "linqu-ub,scenario-path=$SCENARIO" \
   -kernel "$KERNEL_IMAGE" \
   -initrd "$INITRAMFS_IMAGE" \
-  -append "console=ttyAMA0 rdinit=/init" \
+  -append "console=ttyAMA0 rdinit=/init ${APPEND_EXTRA}" \
   >"$SERIAL_LOG" 2>&1 &
 
 echo $! > "$PID_FILE"

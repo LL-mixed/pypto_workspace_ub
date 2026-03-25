@@ -12,6 +12,7 @@ The goal is narrow:
    - discover the `linqu-ub` DT node
    - read/write the device MMIO window
    - observe `cmdq/cq/irq/last_error` state
+5. Optionally load a minimal guest-side `linqu-ub` platform driver
 
 This avoids going straight to a kernel driver. We want guest-visible evidence
 first.
@@ -40,6 +41,10 @@ environment variables:
   - builds `linqu_probe` and packs the initramfs
 - `run_linux_probe.sh`
   - launches `qemu-system-aarch64` with the kernel + initramfs
+- `driver/linqu_ub_drv.c`
+  - minimal guest-side platform driver
+- `build_driver.sh`
+  - builds the external kernel module when a matching kernel build tree exists
 
 ## Current State
 

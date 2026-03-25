@@ -1,4 +1,8 @@
 use sim_core::{CompletionEvent, EntityId, HealthStatus, SegmentHandle, SimError};
+use sim_services::{
+    block::BlockServiceProfile, db::DbServiceProfile, dfs::DfsServiceProfile,
+    shmem::ShmemServiceProfile,
+};
 use sim_topology::{SimTopology, TopologySnapshot};
 use sim_uapi::{LocalGuestUapiSurface, UapiCommand, UapiResponse};
 
@@ -14,14 +18,14 @@ impl QemuBackendAdapter {
     pub fn new(topology: SimTopology) -> Self {
         Self {
             profile: MachineProfile::default(),
-            surface: LocalGuestUapiSurface::new(topology),
+            surface: tuned_surface_from_env(topology),
         }
     }
 
     pub fn with_profile(topology: SimTopology, profile: MachineProfile) -> Self {
         Self {
             profile,
-            surface: LocalGuestUapiSurface::new(topology),
+            surface: tuned_surface_from_env(topology),
         }
     }
 
@@ -141,4 +145,46 @@ impl QemuBackendAdapter {
             _ => Err(SimError::InvalidInput("unexpected health response")),
         }
     }
+}
+
+fn env_usize(name: &str) -> Option<usize> {
+    std::env::var(name).ok()?.parse().ok()
+}
+
+fn env_u64(name: &str) -> Option<u64> {
+    std::env::var(name).ok()?.parse().ok()
+}
+
+fn env_u32(name: &str) -> Option<u32> {
+    std::env::var(name).ok()?.parse().ok()
+}
+
+fn tuned_surface_from_env(topology: SimTopology) -> LocalGuestUapiSurface {
+    let block_profile = BlockServiceProfile {
+        queue_depth: env_usize("LINQU_UB_BLOCK_QUEUE_DEPTH").unwrap_or(16),
+        ..BlockServiceProfile::default()
+    };
+    let shmem_profile = ShmemServiceProfile {
+        queue_depth: env_usize("LINQU_UB_SHMEM_QUEUE_DEPTH").unwrap_or(16),
+        ..ShmemServiceProfile::default()
+    };
+    let dfs_profile = DfsServiceProfile {
+        queue_depth: env_usize("LINQU_UB_DFS_QUEUE_DEPTH").unwrap_or(16),
+        ..DfsServiceProfile::default()
+    };
+    let db_profile = DbServiceProfile {
+        queue_depth: env_usize("LINQU_UB_DB_QUEUE_DEPTH").unwrap_or(16),
+        ..DbServiceProfile::default()
+    };
+    LocalGuestUapiSurface::with_profiles_and_runtime_policy(
+        topology,
+        block_profile,
+        shmem_profile,
+        dfs_profile,
+        db_profile,
+        env_u64("LINQU_UB_RUNTIME_ISSUE_LATENCY_US").unwrap_or(4),
+        env_u64("LINQU_UB_RUNTIME_RETRY_DELAY_US").unwrap_or(5),
+        env_usize("LINQU_UB_RUNTIME_QUEUE_DEPTH").unwrap_or(32),
+        env_u32("LINQU_UB_RUNTIME_MAX_RETRIES").unwrap_or(1),
+    )
 }

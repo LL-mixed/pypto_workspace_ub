@@ -153,12 +153,42 @@ struct UapiRuntimeFailure {
 
 impl LocalGuestUapiSurface {
     pub fn new(topology: SimTopology) -> Self {
-        Self::with_service_profiles(
+        Self::with_profiles_and_runtime_policy(
             topology,
             BlockServiceProfile::default(),
             ShmemServiceProfile::default(),
             DfsServiceProfile::default(),
             DbServiceProfile::default(),
+            4,
+            5,
+            32,
+            1,
+        )
+    }
+
+    pub fn with_profiles_and_runtime_policy(
+        topology: SimTopology,
+        block_profile: BlockServiceProfile,
+        shmem_profile: ShmemServiceProfile,
+        dfs_profile: DfsServiceProfile,
+        db_profile: DbServiceProfile,
+        runtime_issue_latency_us: u64,
+        runtime_retry_delay_us: u64,
+        runtime_queue_depth: usize,
+        runtime_max_retries: u32,
+    ) -> Self {
+        Self::with_service_profiles(
+            topology,
+            block_profile,
+            shmem_profile,
+            dfs_profile,
+            db_profile,
+        )
+        .with_runtime_policy(
+            runtime_issue_latency_us,
+            runtime_retry_delay_us,
+            runtime_queue_depth,
+            runtime_max_retries,
         )
     }
 
@@ -198,6 +228,26 @@ impl LocalGuestUapiSurface {
             runtime_queue: SharedRuntimeExecutor::with_policy(4, 5, 32, 1),
             completion_routes: RuntimeCompletionTracker::default(),
         }
+    }
+
+    pub fn with_runtime_policy(
+        mut self,
+        runtime_issue_latency_us: u64,
+        runtime_retry_delay_us: u64,
+        runtime_queue_depth: usize,
+        runtime_max_retries: u32,
+    ) -> Self {
+        self.runtime_issue_latency_us = runtime_issue_latency_us;
+        self.runtime_retry_delay_us = runtime_retry_delay_us;
+        self.runtime_queue_depth = runtime_queue_depth;
+        self.runtime_max_retries = runtime_max_retries;
+        self.runtime_queue = SharedRuntimeExecutor::with_policy(
+            runtime_issue_latency_us,
+            runtime_retry_delay_us,
+            runtime_queue_depth,
+            runtime_max_retries,
+        );
+        self
     }
 
     fn default_cq(&self) -> Result<CqHandle, SimError> {

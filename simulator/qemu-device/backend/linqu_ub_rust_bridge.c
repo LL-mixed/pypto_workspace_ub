@@ -15,6 +15,14 @@ static int linqu_ub_rust_register_endpoint(void *opaque,
     return linqu_ub_bridge_register_endpoint(bridge->bridge, endpoint_id, entity_id);
 }
 
+static int linqu_ub_rust_get_default_segment(void *opaque,
+                                             uint16_t endpoint_id,
+                                             uint64_t *segment_out)
+{
+    LinquUbRustBridge *bridge = opaque;
+    return linqu_ub_bridge_get_default_segment(bridge->bridge, endpoint_id, segment_out);
+}
+
 static int linqu_ub_rust_submit_slot(void *opaque,
                                      uint16_t endpoint_id,
                                      const uint8_t *slot,
@@ -82,6 +90,7 @@ bool linqu_ub_rust_bridge_fill_ops(LinquUbRustBridge *bridge, LinquUbBackendOps 
 
     ops->opaque = bridge;
     ops->register_endpoint = linqu_ub_rust_register_endpoint;
+    ops->get_default_segment = linqu_ub_rust_get_default_segment;
     ops->submit_slot = linqu_ub_rust_submit_slot;
     ops->ring_doorbell = linqu_ub_rust_ring_doorbell;
     ops->poll_completion = linqu_ub_rust_poll_completion;

@@ -25,6 +25,7 @@
 #define LINQU_UB_REG_LAST_ERROR        0x70
 #define LINQU_UB_REG_IRQ_STATUS        0x78
 #define LINQU_UB_REG_IRQ_ACK           0x80
+#define LINQU_UB_REG_DEFAULT_SEGMENT   0x88
 
 #define LINQU_UB_DESC_BYTES            64
 #define LINQU_UB_MAX_ENDPOINTS         16

@@ -13,6 +13,10 @@ int linqu_ub_bridge_register_endpoint(LinquUbBridge *bridge,
                                       uint16_t endpoint_id,
                                       uint32_t entity_id);
 
+int linqu_ub_bridge_get_default_segment(LinquUbBridge *bridge,
+                                        uint16_t endpoint_id,
+                                        uint64_t *segment_out);
+
 int linqu_ub_bridge_submit_slot(LinquUbBridge *bridge,
                                 uint16_t endpoint_id,
                                 const uint8_t *slot,

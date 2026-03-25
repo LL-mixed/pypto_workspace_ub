@@ -33,6 +33,14 @@ _start:
     bl   uart_puts
     bl   uart_newline
 
+    mrs  x1, CurrentEL
+    adrp x20, currentel_label@PAGE
+    add  x20, x20, currentel_label@PAGEOFF
+    bl   uart_puts
+    mov  x0, x1
+    bl   uart_puthex64
+    bl   uart_newline
+
     movz x0, #(LINQU_BASE >> 16), lsl #16
     movk x0, #(LINQU_BASE & 0xffff), lsl #0
     ldr  x1, [x0, #REG_VERSION]
@@ -271,6 +279,8 @@ probe_banner:
     .asciz "linqu-ub guest probe"
 version_label:
     .asciz "version="
+currentel_label:
+    .asciz "currentel="
 status_label:
     .asciz "status="
 cq_tail_label:

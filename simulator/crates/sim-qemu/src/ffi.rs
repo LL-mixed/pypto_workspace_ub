@@ -9,7 +9,13 @@ use crate::{GuestDescriptor, GuestEndpointSession, QemuBackendAdapter};
 
 pub struct LinquUbBridge {
     adapter: QemuBackendAdapter,
-    sessions: HashMap<u16, GuestEndpointSession>,
+    sessions: HashMap<u16, BridgeEndpointSession>,
+}
+
+#[derive(Clone)]
+struct BridgeEndpointSession {
+    session: GuestEndpointSession,
+    default_segment: u64,
 }
 
 impl LinquUbBridge {
@@ -27,8 +33,25 @@ impl LinquUbBridge {
             .adapter
             .register_endpoint(entity_id)
             .map_err(|_| "register endpoint failed")?;
-        self.sessions.insert(endpoint_id, session);
+        let default_segment = self
+            .adapter
+            .create_segment(&session, 4096)
+            .map_err(|_| "create default segment failed")?;
+        self.sessions.insert(
+            endpoint_id,
+            BridgeEndpointSession {
+                session,
+                default_segment: default_segment.0,
+            },
+        );
         Ok(())
+    }
+
+    fn default_segment(&self, endpoint_id: u16) -> Result<u64, &'static str> {
+        self.sessions
+            .get(&endpoint_id)
+            .map(|session| session.default_segment)
+            .ok_or("unknown endpoint")
     }
 
     fn submit_slot(
@@ -40,6 +63,7 @@ impl LinquUbBridge {
             .sessions
             .get(&endpoint_id)
             .ok_or("unknown endpoint")?
+            .session
             .clone();
         let desc = GuestDescriptor::decode(slot)?;
         let _ = self
@@ -58,6 +82,7 @@ impl LinquUbBridge {
             .sessions
             .get(&endpoint_id)
             .ok_or("unknown endpoint")?
+            .session
             .clone();
         let (submitted, pending) = self
             .adapter
@@ -75,6 +100,7 @@ impl LinquUbBridge {
             .sessions
             .get(&endpoint_id)
             .ok_or("unknown endpoint")?
+            .session
             .clone();
         let (events, _) = self
             .adapter
@@ -133,6 +159,26 @@ pub extern "C" fn linqu_ub_bridge_register_endpoint(
             .map_err(|_| -1)
     }) {
         Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn linqu_ub_bridge_get_default_segment(
+    ptr: *mut LinquUbBridge,
+    endpoint_id: u16,
+    segment_out: *mut u64,
+) -> c_int {
+    if segment_out.is_null() {
+        return -1;
+    }
+    match bridge_mut(ptr).and_then(|bridge| bridge.default_segment(endpoint_id).map_err(|_| -1)) {
+        Ok(segment) => {
+            unsafe {
+                *segment_out = segment;
+            }
+            0
+        }
         Err(code) => code,
     }
 }

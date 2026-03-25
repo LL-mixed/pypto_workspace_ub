@@ -24,6 +24,7 @@ typedef struct LinquUbEndpointState {
     uint32_t cq_head;
     uint32_t cq_tail;
 
+    uint64_t default_segment;
     uint64_t last_error;
     uint64_t irq_status;
 } LinquUbEndpointState;

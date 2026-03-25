@@ -13,6 +13,10 @@ typedef struct LinquUbBackendOps {
                              uint16_t endpoint_id,
                              uint32_t entity_id);
 
+    int (*get_default_segment)(void *opaque,
+                               uint16_t endpoint_id,
+                               uint64_t *segment_out);
+
     /*
      * Submit one raw descriptor slot to the host-side simulator backend.
      * The backend is expected to decode the slot using the same fixed-width

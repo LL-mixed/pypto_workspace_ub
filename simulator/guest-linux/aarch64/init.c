@@ -57,6 +57,19 @@ static void run_probe(void)
     }
 }
 
+static void try_load_driver(void)
+{
+    if (access("/bin/insmod", X_OK) != 0 || access("/lib/modules/linqu_ub_drv.ko", R_OK) != 0) {
+        return;
+    }
+
+    if (fork() == 0) {
+        execl("/bin/insmod", "/bin/insmod", "/lib/modules/linqu_ub_drv.ko", (char *)NULL);
+        _exit(127);
+    }
+    wait(NULL);
+}
+
 int main(void)
 {
     puts("[init] linqu-ub linux probe");
@@ -77,6 +90,7 @@ int main(void)
     try_mount("none", "/dev", "devtmpfs", 0);
     try_mount("none", "/dev/pts", "devpts", 0);
 
+    try_load_driver();
     run_probe();
 
     puts("[init] probe finished, powering off");

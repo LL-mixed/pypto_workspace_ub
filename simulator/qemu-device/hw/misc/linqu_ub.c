@@ -67,6 +67,21 @@ static bool linqu_ub_register_backend_endpoint(LinquUbState *s,
                    ep->entity_id);
         return false;
     }
+
+    if (s->backend.get_default_segment) {
+        uint64_t segment = 0;
+
+        rc = s->backend.get_default_segment(s->backend.opaque,
+                                            ep->endpoint_id,
+                                            &segment);
+        if (rc < 0) {
+            error_setg(errp,
+                       "linqu-ub backend failed to fetch default segment for endpoint %u",
+                       ep->endpoint_id);
+            return false;
+        }
+        ep->default_segment = segment;
+    }
     return true;
 }
 
@@ -254,6 +269,8 @@ static uint64_t linqu_ub_ep_reg_read(LinquUbState *s, LinquUbEndpointState *ep, 
         return ep->last_error;
     case LINQU_UB_REG_IRQ_STATUS:
         return ep->irq_status;
+    case LINQU_UB_REG_DEFAULT_SEGMENT:
+        return ep->default_segment;
     case LINQU_UB_REG_IRQ_ACK:
         return 0;
     default:
@@ -310,6 +327,7 @@ static void linqu_ub_ep_reg_write(LinquUbState *s, LinquUbEndpointState *ep,
     case LINQU_UB_REG_STATUS:
     case LINQU_UB_REG_LAST_ERROR:
     case LINQU_UB_REG_IRQ_STATUS:
+    case LINQU_UB_REG_DEFAULT_SEGMENT:
         linqu_ub_set_error(s, ep, LINQU_UB_ERR_INVALID_REGISTER_WRITE);
         break;
     default:
