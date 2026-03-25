@@ -11,6 +11,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 #define DT_ROOT "/proc/device-tree"
@@ -20,9 +21,13 @@
 #define PAGE_SIZE_BYTES 4096ULL
 
 #define REG_VERSION    0x000
+#define REG_CMDQ_BASE_LO 0x010
+#define REG_CMDQ_BASE_HI 0x018
 #define REG_CMDQ_SIZE  0x020
 #define REG_CMDQ_HEAD  0x028
 #define REG_CMDQ_TAIL  0x030
+#define REG_CQ_BASE_LO 0x038
+#define REG_CQ_BASE_HI 0x040
 #define REG_CQ_SIZE    0x048
 #define REG_CQ_HEAD    0x050
 #define REG_CQ_TAIL    0x058
@@ -30,6 +35,7 @@
 #define REG_DOORBELL   0x068
 #define REG_LAST_ERROR 0x070
 #define REG_IRQ_STATUS 0x078
+#define REG_IRQ_ACK    0x080
 
 #define UART_REG_DR 0x000
 #define UART_REG_FR 0x018
@@ -225,7 +231,6 @@ static int probe_mmio(uint64_t root_base)
     volatile uint8_t *ep_mmio;
     volatile uint64_t *root_regs;
     volatile uint64_t *ep_regs;
-    uint64_t value;
 
     fd = open("/dev/mem", O_RDWR | O_SYNC);
     if (fd < 0) {
@@ -265,18 +270,6 @@ static int probe_mmio(uint64_t root_base)
     print_hex64("mmio.status.before", ep_regs[REG_STATUS / 8]);
     print_hex64("mmio.irq_status.before", ep_regs[REG_IRQ_STATUS / 8]);
     print_hex64("mmio.last_error.before", ep_regs[REG_LAST_ERROR / 8]);
-
-    ep_regs[REG_CMDQ_TAIL / 8] = 1;
-    value = ep_regs[REG_CMDQ_TAIL / 8];
-    print_hex64("mmio.cmdq_tail.after_write", value);
-    print_hex64("mmio.last_error.after_tail", ep_regs[REG_LAST_ERROR / 8]);
-
-    ep_regs[REG_DOORBELL / 8] = 1;
-    print_hex64("mmio.cmdq_head.after_ring", ep_regs[REG_CMDQ_HEAD / 8]);
-    print_hex64("mmio.cq_tail.after_ring", ep_regs[REG_CQ_TAIL / 8]);
-    print_hex64("mmio.status.after_ring", ep_regs[REG_STATUS / 8]);
-    print_hex64("mmio.irq_status.after_ring", ep_regs[REG_IRQ_STATUS / 8]);
-    print_hex64("mmio.last_error.after_ring", ep_regs[REG_LAST_ERROR / 8]);
 
     munmap(ep_map, PAGE_SIZE_BYTES);
     munmap(root_map, PAGE_SIZE_BYTES);
@@ -321,6 +314,191 @@ static int probe_uart_mmio(uint64_t base)
     return 0;
 }
 
+static void write_u8_le(uint8_t *buf, size_t *off, uint8_t value)
+{
+    buf[*off] = value;
+    *off += 1;
+}
+
+static void write_u64_le(uint8_t *buf, size_t *off, uint64_t value)
+{
+    memcpy(buf + *off, &value, sizeof(value));
+    *off += sizeof(value);
+}
+
+static int phys_for_virt(void *ptr, uint64_t *phys_out)
+{
+    uint64_t virt = (uint64_t)(uintptr_t)ptr;
+    uint64_t page_index = virt / PAGE_SIZE_BYTES;
+    uint64_t page_off = virt % PAGE_SIZE_BYTES;
+    uint64_t entry = 0;
+    int fd;
+    ssize_t n;
+
+    fd = open("/proc/self/pagemap", O_RDONLY);
+    if (fd < 0) {
+        perror("open(/proc/self/pagemap)");
+        return -1;
+    }
+
+    n = pread(fd, &entry, sizeof(entry), (off_t)(page_index * sizeof(entry)));
+    close(fd);
+    if (n != (ssize_t)sizeof(entry)) {
+        perror("pread(/proc/self/pagemap)");
+        return -1;
+    }
+    if ((entry & (1ULL << 63)) == 0) {
+        fprintf(stderr, "pagemap entry not present\n");
+        return -1;
+    }
+
+    *phys_out = ((entry & ((1ULL << 55) - 1)) * PAGE_SIZE_BYTES) + page_off;
+    return 0;
+}
+
+static void dump_slot_hex(const char *label, const uint8_t *buf, size_t len)
+{
+    size_t i;
+
+    printf("%s=", label);
+    for (i = 0; i < len; ++i) {
+        printf("%02x", buf[i]);
+        if (i + 1 != len) {
+            putchar(':');
+        }
+    }
+    putchar('\n');
+}
+
+static void build_dbput_descriptor(uint8_t *slot, size_t slot_bytes)
+{
+    static const char key[] = "guest-probe-dbput";
+    size_t off = 0;
+
+    memset(slot, 0, slot_bytes);
+    write_u8_le(slot, &off, 7);
+    write_u8_le(slot, &off, 0);
+    write_u8_le(slot, &off, (uint8_t)(sizeof(key) - 1));
+    memcpy(slot + off, key, sizeof(key) - 1);
+    off += sizeof(key) - 1;
+    write_u64_le(slot, &off, 16);
+}
+
+static void decode_completion_preview(const uint8_t *slot, size_t len)
+{
+    uint64_t op_id = 0;
+    uint8_t task_flag = 0;
+    uint8_t source = 0;
+    uint8_t status = 0;
+    uint64_t finished_at = 0;
+
+    if (len < 19) {
+        puts("completion.preview=slot-too-small");
+        return;
+    }
+
+    memcpy(&op_id, slot, sizeof(op_id));
+    task_flag = slot[8];
+    source = slot[9];
+    status = slot[10];
+    memcpy(&finished_at, slot + 11, sizeof(finished_at));
+
+    print_hex64("completion.op_id", op_id);
+    print_hex64("completion.task_flag", task_flag);
+    print_hex64("completion.source", source);
+    print_hex64("completion.status", status);
+    print_hex64("completion.finished_at", finished_at);
+}
+
+static int probe_ring_path(uint64_t root_base)
+{
+    uint64_t ep_base = root_base + LINQU_ENDPOINT1_OFFSET;
+    uint64_t ep_page_base = ep_base & ~(PAGE_SIZE_BYTES - 1);
+    uint64_t ep_page_off = ep_base - ep_page_base;
+    int fd;
+    void *ep_map;
+    volatile uint8_t *ep_mmio;
+    volatile uint64_t *ep_regs;
+    uint8_t *cmdq;
+    uint8_t *cq;
+    uint64_t cmdq_phys = 0;
+    uint64_t cq_phys = 0;
+
+    fd = open("/dev/mem", O_RDWR | O_SYNC);
+    if (fd < 0) {
+        perror("open(/dev/mem ring)");
+        return 1;
+    }
+    ep_map = mmap(NULL, PAGE_SIZE_BYTES, PROT_READ | PROT_WRITE, MAP_SHARED, fd, (off_t)ep_page_base);
+    close(fd);
+    if (ep_map == MAP_FAILED) {
+        perror("mmap(/dev/mem ring)");
+        return 1;
+    }
+
+    cmdq = mmap(NULL, PAGE_SIZE_BYTES, PROT_READ | PROT_WRITE,
+                MAP_PRIVATE | MAP_ANON, -1, 0);
+    cq = mmap(NULL, PAGE_SIZE_BYTES, PROT_READ | PROT_WRITE,
+              MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (cmdq == MAP_FAILED || cq == MAP_FAILED) {
+        perror("mmap(queue pages)");
+        if (cmdq != MAP_FAILED) {
+            munmap(cmdq, PAGE_SIZE_BYTES);
+        }
+        if (cq != MAP_FAILED) {
+            munmap(cq, PAGE_SIZE_BYTES);
+        }
+        munmap(ep_map, PAGE_SIZE_BYTES);
+        return 1;
+    }
+
+    memset(cmdq, 0, PAGE_SIZE_BYTES);
+    memset(cq, 0, PAGE_SIZE_BYTES);
+    build_dbput_descriptor(cmdq, 64);
+
+    if (phys_for_virt(cmdq, &cmdq_phys) != 0 || phys_for_virt(cq, &cq_phys) != 0) {
+        munmap(cmdq, PAGE_SIZE_BYTES);
+        munmap(cq, PAGE_SIZE_BYTES);
+        munmap(ep_map, PAGE_SIZE_BYTES);
+        return 1;
+    }
+
+    ep_mmio = (volatile uint8_t *)ep_map + ep_page_off;
+    ep_regs = (volatile uint64_t *)ep_mmio;
+
+    puts("ring-probe");
+    print_hex64("ring.cmdq_phys", cmdq_phys);
+    print_hex64("ring.cq_phys", cq_phys);
+    dump_slot_hex("ring.cmdq_slot0.before", cmdq, 32);
+
+    ep_regs[REG_CMDQ_BASE_LO / 8] = (uint32_t)cmdq_phys;
+    ep_regs[REG_CMDQ_BASE_HI / 8] = cmdq_phys >> 32;
+    ep_regs[REG_CQ_BASE_LO / 8] = (uint32_t)cq_phys;
+    ep_regs[REG_CQ_BASE_HI / 8] = cq_phys >> 32;
+    ep_regs[REG_CQ_HEAD / 8] = 0;
+    ep_regs[REG_CMDQ_TAIL / 8] = 1;
+
+    print_hex64("ring.cmdq_tail.programmed", ep_regs[REG_CMDQ_TAIL / 8]);
+    ep_regs[REG_DOORBELL / 8] = 1;
+
+    print_hex64("ring.cmdq_head.after_ring", ep_regs[REG_CMDQ_HEAD / 8]);
+    print_hex64("ring.cq_tail.after_ring", ep_regs[REG_CQ_TAIL / 8]);
+    print_hex64("ring.status.after_ring", ep_regs[REG_STATUS / 8]);
+    print_hex64("ring.irq_status.after_ring", ep_regs[REG_IRQ_STATUS / 8]);
+    print_hex64("ring.last_error.after_ring", ep_regs[REG_LAST_ERROR / 8]);
+
+    dump_slot_hex("ring.cq_slot0.after", cq, 32);
+    decode_completion_preview(cq, 64);
+
+    ep_regs[REG_IRQ_ACK / 8] = ep_regs[REG_IRQ_STATUS / 8];
+    print_hex64("ring.irq_status.after_ack", ep_regs[REG_IRQ_STATUS / 8]);
+
+    munmap(cmdq, PAGE_SIZE_BYTES);
+    munmap(cq, PAGE_SIZE_BYTES);
+    munmap(ep_map, PAGE_SIZE_BYTES);
+    return 0;
+}
+
 int main(void)
 {
     struct linqu_dt_info info = {0};
@@ -352,5 +530,6 @@ int main(void)
 
     probe_uart_mmio(UART0_MMIO_BASE);
     dump_text_file_matches("/proc/iomem", "c000000", "linqu");
-    return probe_mmio(base);
+    probe_mmio(base);
+    return probe_ring_path(base);
 }
