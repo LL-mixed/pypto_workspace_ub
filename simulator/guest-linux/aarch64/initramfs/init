@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+
+mount -t proc none /proc
+mount -t sysfs none /sys
+mount -t devtmpfs none /dev || true
+mkdir -p /dev/pts /dev/shm /tmp
+mount -t devpts none /dev/pts || true
+
+echo "[init] linqu-ub linux probe"
+if [ -x /bin/linqu_probe ]; then
+  /bin/linqu_probe || true
+else
+  echo "[init] /bin/linqu_probe missing"
+fi
+
+if [ -x /bin/busybox ]; then
+  echo "[init] dropping to busybox shell"
+  exec /bin/busybox sh
+fi
+
+echo "[init] probe finished, powering off"
+poweroff -f || reboot -f || exec sleep 3600

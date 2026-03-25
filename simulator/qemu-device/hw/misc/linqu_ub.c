@@ -194,38 +194,37 @@ static bool linqu_ub_decode_offset(hwaddr addr, uint16_t *endpoint_id, hwaddr *r
     return true;
 }
 
-static uint64_t linqu_ub_mmio_read(void *opaque, hwaddr addr, unsigned size)
+static uint64_t linqu_ub_access_extract(uint64_t full_value, hwaddr reg, unsigned size)
 {
-    LinquUbState *s = opaque;
-    LinquUbEndpointState *ep;
-    uint16_t endpoint_id;
-    hwaddr reg;
+    if (size == 8) {
+        return full_value;
+    }
+    if (size == 4) {
+        return (reg & 0x4) ? (full_value >> 32) & 0xffffffffULL
+                           : full_value & 0xffffffffULL;
+    }
+    return 0;
+}
 
-    if (size != 8) {
-        return 0;
+static uint64_t linqu_ub_access_merge(uint64_t current_value, hwaddr reg,
+                                      uint64_t value, unsigned size)
+{
+    if (size == 8) {
+        return value;
     }
+    if (size == 4) {
+        if (reg & 0x4) {
+            return (current_value & 0x00000000ffffffffULL) |
+                   ((value & 0xffffffffULL) << 32);
+        }
+        return (current_value & 0xffffffff00000000ULL) |
+               (value & 0xffffffffULL);
+    }
+    return current_value;
+}
 
-    if (addr == LINQU_UB_REG_VERSION) {
-        qemu_log_mask(LOG_GUEST_ERROR,
-                      "linqu-ub:mmio-read addr=0x%" HWADDR_PRIx " size=%u -> version=1\n",
-                      addr, size);
-        return 1;
-    }
-    if (addr == LINQU_UB_REG_FEATURES) {
-        qemu_log_mask(LOG_GUEST_ERROR,
-                      "linqu-ub:mmio-read addr=0x%" HWADDR_PRIx " size=%u -> features=0\n",
-                      addr, size);
-        return 0;
-    }
-
-    if (!linqu_ub_decode_offset(addr, &endpoint_id, &reg)) {
-        return 0;
-    }
-    ep = linqu_ub_get_endpoint(s, endpoint_id);
-    if (!ep) {
-        return 0;
-    }
-
+static uint64_t linqu_ub_ep_reg_read(LinquUbState *s, LinquUbEndpointState *ep, hwaddr reg)
+{
     switch (reg) {
     case LINQU_UB_REG_CMDQ_BASE_LO:
         return (uint32_t)ep->cmdq_iova;
@@ -263,27 +262,9 @@ static uint64_t linqu_ub_mmio_read(void *opaque, hwaddr addr, unsigned size)
     }
 }
 
-static void linqu_ub_mmio_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+static void linqu_ub_ep_reg_write(LinquUbState *s, LinquUbEndpointState *ep,
+                                  hwaddr reg, uint64_t value)
 {
-    LinquUbState *s = opaque;
-    LinquUbEndpointState *ep;
-    uint16_t endpoint_id;
-    hwaddr reg;
-
-    if (size != 8) {
-        return;
-    }
-    qemu_log_mask(LOG_GUEST_ERROR,
-                  "linqu-ub:mmio-write addr=0x%" HWADDR_PRIx " size=%u value=0x%" PRIx64 "\n",
-                  addr, size, value);
-    if (!linqu_ub_decode_offset(addr, &endpoint_id, &reg)) {
-        return;
-    }
-    ep = linqu_ub_get_endpoint(s, endpoint_id);
-    if (!ep) {
-        return;
-    }
-
     switch (reg) {
     case LINQU_UB_REG_CMDQ_BASE_LO:
         ep->cmdq_iova = (ep->cmdq_iova & 0xffffffff00000000ULL) | (value & 0xffffffffULL);
@@ -337,11 +318,69 @@ static void linqu_ub_mmio_write(void *opaque, hwaddr addr, uint64_t value, unsig
     }
 }
 
+static uint64_t linqu_ub_mmio_read(void *opaque, hwaddr addr, unsigned size)
+{
+    LinquUbState *s = opaque;
+    LinquUbEndpointState *ep;
+    uint16_t endpoint_id;
+    hwaddr reg;
+
+    qemu_log_mask(LOG_GUEST_ERROR,
+                  "linqu-ub:mmio-read addr=0x%" HWADDR_PRIx " size=%u\n",
+                  addr, size);
+    if (size != 4 && size != 8) {
+        return 0;
+    }
+
+    if (addr == LINQU_UB_REG_VERSION) {
+        return linqu_ub_access_extract(1, addr, size);
+    }
+    if (addr == LINQU_UB_REG_FEATURES) {
+        return 0;
+    }
+
+    if (!linqu_ub_decode_offset(addr, &endpoint_id, &reg)) {
+        return 0;
+    }
+    ep = linqu_ub_get_endpoint(s, endpoint_id);
+    if (!ep) {
+        return 0;
+    }
+
+    reg &= ~0x7ULL;
+    return linqu_ub_access_extract(linqu_ub_ep_reg_read(s, ep, reg), addr, size);
+}
+
+static void linqu_ub_mmio_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+{
+    LinquUbState *s = opaque;
+    LinquUbEndpointState *ep;
+    uint16_t endpoint_id;
+    hwaddr reg;
+
+    qemu_log_mask(LOG_GUEST_ERROR,
+                  "linqu-ub:mmio-write addr=0x%" HWADDR_PRIx " size=%u value=0x%" PRIx64 "\n",
+                  addr, size, value);
+    if (size != 4 && size != 8) {
+        return;
+    }
+    if (!linqu_ub_decode_offset(addr, &endpoint_id, &reg)) {
+        return;
+    }
+    ep = linqu_ub_get_endpoint(s, endpoint_id);
+    if (!ep) {
+        return;
+    }
+    reg &= ~0x7ULL;
+    value = linqu_ub_access_merge(linqu_ub_ep_reg_read(s, ep, reg), addr, value, size);
+    linqu_ub_ep_reg_write(s, ep, reg, value);
+}
+
 static const MemoryRegionOps linqu_ub_mmio_ops = {
     .read = linqu_ub_mmio_read,
     .write = linqu_ub_mmio_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
-    .valid.min_access_size = 8,
+    .valid.min_access_size = 4,
     .valid.max_access_size = 8,
 };
 
