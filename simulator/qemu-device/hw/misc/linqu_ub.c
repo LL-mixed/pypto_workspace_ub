@@ -5,9 +5,140 @@
 #include "hw/misc/linqu_ub_regs.h"
 #include "hw/misc/linqu_ub_rust_bridge.h"
 #include "migration/vmstate.h"
+#include "qemu/cutils.h"
 #include "system/address-spaces.h"
 #include "system/dma.h"
+#include "system/memory.h"
 #include "qemu/log.h"
+
+typedef struct QEMU_PACKED LinquUbTableHeader {
+    char name[16];
+    uint32_t total_size;
+    uint8_t version;
+    uint8_t reserved0[3];
+    uint32_t remaining_size;
+    uint32_t checksum;
+} LinquUbTableHeader;
+
+typedef struct QEMU_PACKED LinquUbUbiosRootTable {
+    LinquUbTableHeader header;
+    uint16_t count;
+    uint8_t reserved1[6];
+    uint64_t sub_tables[1];
+} LinquUbUbiosRootTable;
+
+typedef struct QEMU_PACKED LinquUbUbcNode {
+    uint32_t int_id_start;
+    uint32_t int_id_end;
+    uint64_t hpa_base;
+    uint64_t hpa_size;
+    uint8_t mem_size_limit;
+    uint8_t dma_cca;
+    uint16_t ummu_mapping;
+    uint16_t proximity_domain;
+    uint16_t reserved0;
+    uint64_t msg_queue_base;
+    uint64_t msg_queue_size;
+    uint16_t msg_queue_depth;
+    uint16_t msg_int;
+    uint8_t msg_int_attr;
+    uint8_t reserved1[59];
+    uint64_t ubc_guid_low;
+    uint64_t ubc_guid_high;
+    uint8_t vendor_info[256];
+} LinquUbUbcNode;
+
+typedef struct QEMU_PACKED LinquUbUbcTable {
+    LinquUbTableHeader header;
+    uint32_t cna_start;
+    uint32_t cna_end;
+    uint32_t eid_start;
+    uint32_t eid_end;
+    uint8_t feature;
+    uint8_t reserved0[3];
+    uint16_t cluster_mode;
+    uint16_t ubc_count;
+    LinquUbUbcNode ubcs[1];
+} LinquUbUbcTable;
+
+static uint32_t linqu_ub_table_checksum(const uint8_t *buf, size_t len)
+{
+    uint32_t sum = 0;
+    size_t i;
+
+    for (i = 0; i < len; ++i) {
+        sum += buf[i];
+    }
+    return 0u - sum;
+}
+
+static void linqu_ub_init_table_header(LinquUbTableHeader *hdr,
+                                       const char *name,
+                                       uint32_t total_size)
+{
+    memset(hdr, 0, sizeof(*hdr));
+    pstrcpy(hdr->name, sizeof(hdr->name), name);
+    hdr->total_size = cpu_to_le32(total_size);
+    hdr->version = 1;
+}
+
+bool linqu_ub_populate_ubios(LinquUbState *s,
+                             hwaddr ubios_base,
+                             hwaddr mmio_base,
+                             uint32_t msg_irq)
+{
+    uint8_t *blob;
+    LinquUbUbiosRootTable *root;
+    LinquUbUbcTable *ubc;
+    const size_t root_size = sizeof(*root);
+    const size_t ubc_size = sizeof(*ubc);
+    const size_t ubc_off = 0x100;
+
+    if (ubc_off + ubc_size > LINQU_UB_UBIOS_REGION_SIZE) {
+        return false;
+    }
+
+    blob = memory_region_get_ram_ptr(&s->ubios);
+    memset(blob, 0, LINQU_UB_UBIOS_REGION_SIZE);
+
+    root = (LinquUbUbiosRootTable *)blob;
+    ubc = (LinquUbUbcTable *)(blob + ubc_off);
+
+    linqu_ub_init_table_header(&root->header, "ubios", root_size);
+    root->count = cpu_to_le16(1);
+    root->sub_tables[0] = cpu_to_le64(ubios_base + ubc_off);
+    root->header.checksum = cpu_to_le32(linqu_ub_table_checksum((uint8_t *)root,
+                                                                root_size));
+
+    linqu_ub_init_table_header(&ubc->header, "ubc", ubc_size);
+    ubc->cna_start = cpu_to_le32(1);
+    ubc->cna_end = cpu_to_le32(1);
+    ubc->eid_start = cpu_to_le32(1);
+    ubc->eid_end = cpu_to_le32(s->num_endpoints);
+    ubc->cluster_mode = cpu_to_le16(0);
+    ubc->ubc_count = cpu_to_le16(1);
+
+    ubc->ubcs[0].int_id_start = cpu_to_le32(1);
+    ubc->ubcs[0].int_id_end = cpu_to_le32(1024);
+    ubc->ubcs[0].hpa_base = cpu_to_le64(mmio_base);
+    ubc->ubcs[0].hpa_size = cpu_to_le64(LINQU_UB_MMIO_REGION_SIZE);
+    ubc->ubcs[0].mem_size_limit = 48;
+    ubc->ubcs[0].dma_cca = 1;
+    ubc->ubcs[0].ummu_mapping = cpu_to_le16(0xffff);
+    ubc->ubcs[0].msg_queue_base = cpu_to_le64(mmio_base);
+    ubc->ubcs[0].msg_queue_size = cpu_to_le64(LINQU_UB_MMIO_REGION_SIZE);
+    ubc->ubcs[0].msg_queue_depth = cpu_to_le16(s->endpoints[0].cmdq_depth);
+    ubc->ubcs[0].msg_int = cpu_to_le16(msg_irq);
+    ubc->ubcs[0].ubc_guid_low = cpu_to_le64(0x55425553494d0001ULL);
+    ubc->ubcs[0].ubc_guid_high = cpu_to_le64(0x4c494e5155420001ULL);
+    pstrcpy((char *)ubc->ubcs[0].vendor_info, sizeof(ubc->ubcs[0].vendor_info),
+            "linqu-ub-sim");
+    ubc->header.checksum = cpu_to_le32(linqu_ub_table_checksum((uint8_t *)ubc,
+                                                               ubc_size));
+
+    memory_region_set_readonly(&s->ubios, true);
+    return true;
+}
 
 static LinquUbEndpointState *linqu_ub_get_endpoint(LinquUbState *s, uint16_t endpoint_id)
 {
@@ -457,9 +588,14 @@ static void linqu_ub_realize(DeviceState *dev, Error **errp)
         linqu_ub_set_backend(s, &ops);
     }
 
+    if (!memory_region_init_ram(&s->ubios, OBJECT(dev), "linqu-ub.ubios",
+                                LINQU_UB_UBIOS_REGION_SIZE, errp)) {
+        return;
+    }
     memory_region_init_io(&s->mmio, OBJECT(dev), &linqu_ub_mmio_ops, s,
                           TYPE_LINQU_UB, LINQU_UB_MMIO_REGION_SIZE);
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->mmio);
+    sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->ubios);
     sysbus_init_irq(SYS_BUS_DEVICE(dev), &s->irq);
     linqu_ub_reset(dev);
 

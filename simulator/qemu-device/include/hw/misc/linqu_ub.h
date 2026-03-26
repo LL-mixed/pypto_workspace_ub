@@ -35,6 +35,7 @@ struct LinquUbState {
     SysBusDevice parent_obj;
 
     MemoryRegion mmio;
+    MemoryRegion ubios;
     qemu_irq irq;
 
     uint32_t num_endpoints;
@@ -47,5 +48,9 @@ struct LinquUbState {
 };
 
 void linqu_ub_set_backend(LinquUbState *s, const LinquUbBackendOps *ops);
+bool linqu_ub_populate_ubios(LinquUbState *s,
+                             hwaddr ubios_base,
+                             hwaddr mmio_base,
+                             uint32_t msg_irq);
 
 #endif
