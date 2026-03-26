@@ -51,6 +51,14 @@ static bool cmdline_has_option(const char *needle)
     return strstr(buf, needle) != NULL;
 }
 
+static bool should_run_linqu_probe(void)
+{
+    if (cmdline_has_option("linqu_probe_skip=1")) {
+        return false;
+    }
+    return true;
+}
+
 static void run_probe(void)
 {
     pid_t pid;
@@ -136,6 +144,25 @@ static void dump_ub_state(void)
     dump_dir_entries("/sys/bus/ub");
     dump_dir_entries("/sys/bus/ub/devices");
     dump_dir_entries("/sys/bus/ub/drivers");
+    dump_dir_entries("/sys/bus/ub/instance");
+    dump_dir_entries("/sys/bus/ub/cluster");
+    dump_dir_entries("/sys/bus/ub_service");
+    dump_dir_entries("/sys/bus/ub_service/devices");
+    dump_dir_entries("/sys/bus/ub_service/drivers");
+    dump_dir_entries("/sys/bus/ub/devices/00001");
+    dump_dir_entries("/sys/bus/ub/devices/00001/slot0");
+    dump_dir_entries("/sys/bus/ub/devices/00002");
+    dump_dir_entries("/sys/bus/ub/devices/00002/port0");
+    dump_dir_entries("/sys/bus/ub_service/devices/00001:service002");
+    dump_file("/sys/bus/ub/devices/00001/slot0/power");
+    dump_file("/sys/bus/ub/devices/00002/class_code");
+    dump_file("/sys/bus/ub/devices/00002/type");
+    dump_file("/sys/bus/ub/devices/00002/guid");
+    dump_file("/sys/bus/ub/devices/00002/port0/boundary");
+    dump_file("/sys/bus/ub/devices/00002/port0/linkup");
+    dump_file("/sys/bus/ub/devices/00002/port0/neighbor");
+    dump_file("/sys/bus/ub/devices/00002/port0/neighbor_guid");
+    dump_file("/sys/bus/ub/devices/00002/port0/neighbor_port_idx");
     dump_file("/proc/interrupts");
 }
 
@@ -223,7 +250,11 @@ int main(void)
     dump_guest_payload_state();
     try_load_drivers();
     dump_ub_state();
-    run_probe();
+    if (should_run_linqu_probe()) {
+        run_probe();
+    } else {
+        fprintf(stderr, "[init] linqu_probe skipped by cmdline\n");
+    }
     dump_ub_state();
 
     puts("[init] probe finished, powering off");
