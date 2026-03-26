@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <sched.h>
 #include <stdbool.h>
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,6 +28,27 @@ static void try_mount(const char *source, const char *target,
         fprintf(stderr, "[init] mount %s on %s failed: %s\n",
                 fstype, target, strerror(errno));
     }
+}
+
+static bool cmdline_has_option(const char *needle)
+{
+    int fd;
+    ssize_t n;
+    char buf[2048];
+
+    fd = open("/proc/cmdline", O_RDONLY);
+    if (fd < 0) {
+        return false;
+    }
+
+    n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) {
+        return false;
+    }
+
+    buf[n] = '\0';
+    return strstr(buf, needle) != NULL;
 }
 
 static void run_probe(void)
@@ -57,17 +79,124 @@ static void run_probe(void)
     }
 }
 
-static void try_load_driver(void)
+static void dump_dir_entries(const char *path)
 {
-    if (access("/bin/insmod", X_OK) != 0 || access("/lib/modules/linqu_ub_drv.ko", R_OK) != 0) {
+    DIR *dir;
+    struct dirent *ent;
+
+    dir = opendir(path);
+    if (!dir) {
+        fprintf(stderr, "[init] opendir %s failed: %s\n", path, strerror(errno));
         return;
     }
 
-    if (fork() == 0) {
-        execl("/bin/insmod", "/bin/insmod", "/lib/modules/linqu_ub_drv.ko", (char *)NULL);
+    fprintf(stderr, "[init] ls %s\n", path);
+    while ((ent = readdir(dir)) != NULL) {
+        if (!strcmp(ent->d_name, ".") || !strcmp(ent->d_name, "..")) {
+            continue;
+        }
+        fprintf(stderr, "[init]   %s\n", ent->d_name);
+    }
+
+    closedir(dir);
+}
+
+static void dump_file(const char *path)
+{
+    int fd;
+    ssize_t n;
+    char buf[512];
+
+    fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        fprintf(stderr, "[init] open %s failed: %s\n", path, strerror(errno));
+        return;
+    }
+
+    fprintf(stderr, "[init] cat %s\n", path);
+    while ((n = read(fd, buf, sizeof(buf) - 1)) > 0) {
+        buf[n] = '\0';
+        fprintf(stderr, "%s", buf);
+    }
+    if (n < 0) {
+        fprintf(stderr, "[init] read %s failed: %s\n", path, strerror(errno));
+    }
+    if (n > 0 && buf[n - 1] != '\n') {
+        fprintf(stderr, "\n");
+    }
+
+    close(fd);
+}
+
+static void dump_ub_state(void)
+{
+    dump_dir_entries("/sys/bus");
+    dump_dir_entries("/sys/bus/platform/devices");
+    dump_dir_entries("/sys/bus/platform/drivers");
+    dump_dir_entries("/sys/bus/ub");
+    dump_dir_entries("/sys/bus/ub/devices");
+    dump_dir_entries("/sys/bus/ub/drivers");
+    dump_file("/proc/interrupts");
+}
+
+static void dump_guest_payload_state(void)
+{
+    dump_dir_entries("/bin");
+    dump_dir_entries("/lib");
+    dump_dir_entries("/lib/modules");
+}
+
+static void try_insmod(const char *path)
+{
+    pid_t pid;
+    int status = 0;
+    int waited_ms = 0;
+
+    if (access("/bin/insmod", X_OK) != 0) {
+        fprintf(stderr, "[init] /bin/insmod unavailable: %s\n", strerror(errno));
+        return;
+    }
+
+    if (access(path, R_OK) != 0) {
+        fprintf(stderr, "[init] %s unavailable: %s\n", path, strerror(errno));
+        return;
+    }
+
+    fprintf(stderr, "[init] insmod start %s\n", path);
+    pid = fork();
+    if (pid == 0) {
+        execl("/bin/insmod", "/bin/insmod", path, (char *)NULL);
         _exit(127);
     }
-    wait(NULL);
+    if (pid < 0) {
+        fprintf(stderr, "[init] fork for insmod failed: %s\n", strerror(errno));
+        return;
+    }
+
+    while (waitpid(pid, &status, WNOHANG) == 0) {
+        if (waited_ms >= 4000) {
+            fprintf(stderr, "[init] insmod timeout %s, killing pid=%d\n", path, pid);
+            kill(pid, SIGKILL);
+            waitpid(pid, &status, 0);
+            break;
+        }
+        usleep(100000);
+        waited_ms += 100;
+    }
+
+    if (WIFEXITED(status)) {
+        fprintf(stderr, "[init] insmod exit %s code=%d\n", path, WEXITSTATUS(status));
+    } else if (WIFSIGNALED(status)) {
+        fprintf(stderr, "[init] insmod signal %s sig=%d\n", path, WTERMSIG(status));
+    }
+}
+
+static void try_load_drivers(void)
+{
+    try_insmod("/lib/modules/hisi_ubus.ko");
+    if (cmdline_has_option("linqu_probe_load_helper=1")) {
+        try_insmod("/lib/modules/linqu_ub_drv.ko");
+    }
 }
 
 int main(void)
@@ -90,8 +219,12 @@ int main(void)
     try_mount("none", "/dev", "devtmpfs", 0);
     try_mount("none", "/dev/pts", "devpts", 0);
 
-    try_load_driver();
+    dump_ub_state();
+    dump_guest_payload_state();
+    try_load_drivers();
+    dump_ub_state();
     run_probe();
+    dump_ub_state();
 
     puts("[init] probe finished, powering off");
     sync();

@@ -12,6 +12,7 @@ PID_FILE="$OUT_DIR/linux_probe.qemu.pid"
 SERIAL_LOG="$OUT_DIR/linux_probe.serial.log"
 RUN_SECS="${RUN_SECS:-8}"
 MACHINE="${MACHINE:-virt}"
+MACHINE_OPTS="${MACHINE_OPTS:-}"
 QEMU_DEBUG_FLAGS="${QEMU_DEBUG_FLAGS:-}"
 QEMU_DEBUG_LOG="${QEMU_DEBUG_LOG:-$OUT_DIR/linux_probe.qemu.log}"
 EXTRA_QEMU_ARGS="${EXTRA_QEMU_ARGS:-}"
@@ -72,9 +73,14 @@ if [[ -n "$EXTRA_QEMU_ARGS" ]]; then
   extra_args=(${=EXTRA_QEMU_ARGS})
 fi
 
+machine_args=("-M" "$MACHINE")
+if [[ -n "$MACHINE_OPTS" ]]; then
+  machine_args=("-M" "$MACHINE,$MACHINE_OPTS")
+fi
+
 cd "$QEMU_DIR"
 ./build/qemu-system-aarch64 \
-  -M "$MACHINE" \
+  "${machine_args[@]}" \
   -cpu cortex-a57 \
   -m 512M \
   -nodefaults \

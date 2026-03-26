@@ -12,6 +12,7 @@ INSMOD_SRC="$ROOT_DIR/insmod.c"
 INSMOD_BIN="$OUT_DIR/insmod"
 INITRAMFS_IMG="$OUT_DIR/initramfs.cpio.gz"
 LINQU_MODULE="${LINQU_UB_GUEST_MODULE:-}"
+HISI_UBUS_MODULE="${HISI_UBUS_GUEST_MODULE:-}"
 
 : "${AARCH64_LINUX_CC:=}"
 : "${BUSYBOX:=}"
@@ -42,6 +43,10 @@ fi
 
 if [[ -n "$LINQU_MODULE" ]]; then
   cp "$LINQU_MODULE" "$INITRAMFS_DIR/lib/modules/linqu_ub_drv.ko"
+fi
+
+if [[ -n "$HISI_UBUS_MODULE" ]]; then
+  cp "$HISI_UBUS_MODULE" "$INITRAMFS_DIR/lib/modules/hisi_ubus.ko"
 fi
 
 (
