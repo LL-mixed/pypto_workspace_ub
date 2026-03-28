@@ -4,6 +4,7 @@
 #include <sched.h>
 #include <stdbool.h>
 #include <dirent.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +14,169 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#define UBC_PORT_SLICE_EMULATED_SIZE 0x800ULL
+#define UBC_PORT0_SLICE_OFFSET 0x3400ULL
+#define UBC_PORT_LINK_STATUS_OFFSET 0x700ULL
+#define UBC_PORT_LINK_STATUS_UP 0x1
+#define UBC_PORT1_SLICE_OFFSET (UBC_PORT0_SLICE_OFFSET + UBC_PORT_SLICE_EMULATED_SIZE)
+#define UBC_PORT_NEIGHBOR_PORT_IDX_OFFSET 0x28ULL
+#define UBC_PORT_NEIGHBOR_GUID_OFFSET 0x2cULL
+#define UBC_PORT_GUID_SIZE 16
+#define UBC_RESOURCE_BASE_FALLBACK 0x18000000000ULL
+
+static bool read_file_line(const char *path, char *buf, size_t buf_size)
+{
+    int fd;
+    ssize_t n;
+
+    fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        return false;
+    }
+
+    n = read(fd, buf, buf_size - 1);
+    close(fd);
+    if (n <= 0) {
+        return false;
+    }
+
+    buf[n] = '\0';
+    return true;
+}
+
+static void format_guid_be_hex(const unsigned char *guid, char *out, size_t out_size)
+{
+    size_t i;
+    size_t off = 0;
+
+    if (!out_size) {
+        return;
+    }
+
+    out[0] = '\0';
+    for (i = 0; i < UBC_PORT_GUID_SIZE && off + 2 < out_size; i++) {
+        int written = snprintf(out + off, out_size - off, "%02x", guid[i]);
+
+        if (written < 0) {
+            out[0] = '\0';
+            return;
+        }
+        off += (size_t)written;
+    }
+}
+
+static bool find_ubc_resource_base(uint64_t *base_out)
+{
+    DIR *dir;
+    struct dirent *ent;
+    char resource_path[512];
+    char line[256];
+
+    dir = opendir("/sys/bus/platform/devices");
+    if (!dir) {
+        fprintf(stderr, "[init] opendir /sys/bus/platform/devices failed: %s\n",
+                strerror(errno));
+        return false;
+    }
+
+    while ((ent = readdir(dir)) != NULL) {
+        char *space;
+        uint64_t start = 0;
+        if (!strstr(ent->d_name, ".ubc")) {
+            continue;
+        }
+
+        snprintf(resource_path, sizeof(resource_path),
+                 "/sys/bus/platform/devices/%s/resource", ent->d_name);
+        if (read_file_line(resource_path, line, sizeof(line))) {
+            space = strchr(line, ' ');
+            if (space) {
+                *space = '\0';
+            }
+            errno = 0;
+            start = strtoull(line, NULL, 16);
+            if (errno == 0) {
+                *base_out = start;
+                closedir(dir);
+                return true;
+            }
+        }
+
+    }
+
+    *base_out = UBC_RESOURCE_BASE_FALLBACK;
+    closedir(dir);
+    return true;
+}
+
+static void dump_raw_ubc_port1_state(void)
+{
+    uint64_t ubc_base = 0;
+    uint16_t neighbor_port_idx;
+    int fd;
+    unsigned char link_status = 0;
+    unsigned char guid[UBC_PORT_GUID_SIZE];
+    char guid_str[UBC_PORT_GUID_SIZE * 2 + 1];
+    ssize_t n;
+
+    if (!find_ubc_resource_base(&ubc_base)) {
+        fprintf(stderr, "[init] raw ubc port1: no local .ubc platform resource found\n");
+        return;
+    }
+
+    fd = open("/dev/mem", O_RDONLY | O_SYNC);
+    if (fd < 0) {
+        fprintf(stderr, "[init] raw ubc port1: open /dev/mem failed: %s\n",
+                strerror(errno));
+        return;
+    }
+
+    n = pread(fd, &link_status, sizeof(link_status),
+              (off_t)(ubc_base + UBC_PORT1_SLICE_OFFSET + UBC_PORT_LINK_STATUS_OFFSET));
+    if (n != (ssize_t)sizeof(link_status)) {
+        fprintf(stderr,
+                "[init] raw ubc port1: pread linkup @0x%016" PRIx64 " failed: %s\n",
+                ubc_base + UBC_PORT1_SLICE_OFFSET + UBC_PORT_LINK_STATUS_OFFSET,
+                (n < 0) ? strerror(errno) : "short read");
+        close(fd);
+        return;
+    }
+
+    n = pread(fd, &neighbor_port_idx, sizeof(neighbor_port_idx),
+              (off_t)(ubc_base + UBC_PORT1_SLICE_OFFSET + UBC_PORT_NEIGHBOR_PORT_IDX_OFFSET));
+    if (n != (ssize_t)sizeof(neighbor_port_idx)) {
+        fprintf(stderr,
+                "[init] raw ubc port1: pread neighbor_port_idx @0x%016" PRIx64
+                " failed: %s\n",
+                ubc_base + UBC_PORT1_SLICE_OFFSET + UBC_PORT_NEIGHBOR_PORT_IDX_OFFSET,
+                (n < 0) ? strerror(errno) : "short read");
+        close(fd);
+        return;
+    }
+
+    n = pread(fd, guid, sizeof(guid),
+              (off_t)(ubc_base + UBC_PORT1_SLICE_OFFSET + UBC_PORT_NEIGHBOR_GUID_OFFSET));
+    close(fd);
+    if (n != (ssize_t)sizeof(guid)) {
+        fprintf(stderr,
+                "[init] raw ubc port1: pread neighbor_guid @0x%016" PRIx64
+                " failed: %s\n",
+                ubc_base + UBC_PORT1_SLICE_OFFSET + UBC_PORT_NEIGHBOR_GUID_OFFSET,
+                (n < 0) ? strerror(errno) : "short read");
+        return;
+    }
+
+    format_guid_be_hex(guid, guid_str, sizeof(guid_str));
+
+    fprintf(stderr,
+            "[init] raw ubc port1: base=0x%016" PRIx64
+            " linkup=%u neighbor_port_idx=%u neighbor_guid_raw=%s\n",
+            ubc_base,
+            link_status & UBC_PORT_LINK_STATUS_UP,
+            (unsigned)neighbor_port_idx,
+            guid_str);
+}
 
 static void ensure_dir(const char *path)
 {
@@ -144,26 +308,39 @@ static void dump_ub_state(void)
     dump_dir_entries("/sys/bus/ub");
     dump_dir_entries("/sys/bus/ub/devices");
     dump_dir_entries("/sys/bus/ub/drivers");
-    dump_dir_entries("/sys/bus/ub/instance");
-    dump_dir_entries("/sys/bus/ub/cluster");
     dump_dir_entries("/sys/bus/ub_service");
     dump_dir_entries("/sys/bus/ub_service/devices");
     dump_dir_entries("/sys/bus/ub_service/drivers");
     dump_dir_entries("/sys/bus/ub/devices/00001");
     dump_dir_entries("/sys/bus/ub/devices/00001/slot0");
+    dump_dir_entries("/sys/bus/ub/devices/00001/port1");
     dump_dir_entries("/sys/bus/ub/devices/00002");
     dump_dir_entries("/sys/bus/ub/devices/00002/port0");
     dump_dir_entries("/sys/bus/ub_service/devices/00001:service002");
+    dump_file("/sys/bus/ub/instance");
+    dump_file("/sys/bus/ub/cluster");
     dump_file("/sys/bus/ub/devices/00001/slot0/power");
+    dump_file("/sys/bus/ub/devices/00001/port1/boundary");
+    dump_file("/sys/bus/ub/devices/00001/port1/linkup");
+    dump_file("/sys/bus/ub/devices/00001/port1/cna");
+    dump_file("/sys/bus/ub/devices/00001/port1/neighbor");
+    dump_file("/sys/bus/ub/devices/00001/port1/neighbor_guid");
+    dump_file("/sys/bus/ub/devices/00001/port1/neighbor_port_idx");
+    dump_file("/sys/bus/ub/devices/00001/instance");
     dump_file("/sys/bus/ub/devices/00002/class_code");
     dump_file("/sys/bus/ub/devices/00002/type");
     dump_file("/sys/bus/ub/devices/00002/guid");
+    dump_file("/sys/bus/ub/devices/00002/primary_entity");
+    dump_file("/sys/bus/ub/devices/00002/instance");
+    dump_file("/sys/bus/ub/devices/00002/resource");
     dump_file("/sys/bus/ub/devices/00002/port0/boundary");
     dump_file("/sys/bus/ub/devices/00002/port0/linkup");
+    dump_file("/sys/bus/ub/devices/00002/port0/cna");
     dump_file("/sys/bus/ub/devices/00002/port0/neighbor");
     dump_file("/sys/bus/ub/devices/00002/port0/neighbor_guid");
     dump_file("/sys/bus/ub/devices/00002/port0/neighbor_port_idx");
     dump_file("/proc/interrupts");
+    dump_raw_ubc_port1_state();
 }
 
 static void dump_guest_payload_state(void)
@@ -226,6 +403,35 @@ static void try_load_drivers(void)
     }
 }
 
+static void wait_for_ub_sysfs_ready(void)
+{
+    static const char *required_paths[] = {
+        "/sys/bus/ub/devices/00001/port1/linkup",
+        "/sys/bus/ub/devices/00001",
+        "/sys/bus/ub/devices/00002",
+    };
+    int attempt;
+    size_t i;
+
+    for (attempt = 0; attempt < 120; attempt++) {
+        bool all_ready = true;
+
+        for (i = 0; i < sizeof(required_paths) / sizeof(required_paths[0]); i++) {
+            if (access(required_paths[i], F_OK) != 0) {
+                all_ready = false;
+                break;
+            }
+        }
+        if (all_ready) {
+            fprintf(stderr, "[init] ub sysfs ready via %s\n", required_paths[0]);
+            return;
+        }
+        usleep(100000);
+    }
+
+    fprintf(stderr, "[init] ub sysfs wait timed out\n");
+}
+
 int main(void)
 {
     puts("[init] linqu-ub linux probe");
@@ -249,6 +455,7 @@ int main(void)
     dump_ub_state();
     dump_guest_payload_state();
     try_load_drivers();
+    wait_for_ub_sysfs_ready();
     dump_ub_state();
     if (should_run_linqu_probe()) {
         run_probe();
