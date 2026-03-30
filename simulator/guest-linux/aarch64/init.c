@@ -326,6 +326,7 @@ static void dump_ub_state(void)
     dump_file("/sys/bus/ub/devices/00001/port1/neighbor");
     dump_file("/sys/bus/ub/devices/00001/port1/neighbor_guid");
     dump_file("/sys/bus/ub/devices/00001/port1/neighbor_port_idx");
+    dump_file("/sys/bus/ub/devices/00001/direct_link");
     dump_file("/sys/bus/ub/devices/00001/instance");
     dump_file("/sys/bus/ub/devices/00002/class_code");
     dump_file("/sys/bus/ub/devices/00002/type");
@@ -339,6 +340,7 @@ static void dump_ub_state(void)
     dump_file("/sys/bus/ub/devices/00002/port0/neighbor");
     dump_file("/sys/bus/ub/devices/00002/port0/neighbor_guid");
     dump_file("/sys/bus/ub/devices/00002/port0/neighbor_port_idx");
+    dump_file("/sys/bus/ub/devices/00002/direct_link");
     dump_file("/proc/interrupts");
     dump_raw_ubc_port1_state();
 }
