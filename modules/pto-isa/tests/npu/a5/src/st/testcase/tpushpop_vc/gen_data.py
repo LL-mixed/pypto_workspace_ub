@@ -1,1 +1,0 @@
-../../../../../a2a3/src/st/testcase/tpushpop_vc/gen_data.py

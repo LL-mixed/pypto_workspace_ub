@@ -1,5 +1,0 @@
-add_subdirectory(PTO)
-add_subdirectory(CAPI)
-if(PTO_ENABLE_PYTHON_BINDING)
-    add_subdirectory(Bindings/Python)
-endif()
