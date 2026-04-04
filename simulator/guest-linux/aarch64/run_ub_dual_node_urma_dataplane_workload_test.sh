@@ -153,7 +153,7 @@ start_node() {
     "$QEMU_BIN" \
       -M virt,gic-version=3,its=on,ummu=on,ub-cluster-mode=on \
       -cpu cortex-a57 \
-      -m 512M \
+      -m 8G \
       -nodefaults \
       -nographic \
       -monitor none \

@@ -103,6 +103,7 @@ BUILD_IN_VM=1 BUILD_LINQU_DRIVER_IN_VM=1 ./sync_ub_kernel_artifacts_from_vm.sh
 同步产物：
 - `out/Image`
 - `out/modules/hisi_ubus.ko`
+- `out/modules/udma.ko`
 - `out/modules/linqu_ub_drv.ko`（若 VM 侧存在）
 
 ### 4.3 编译配置位置
@@ -119,6 +120,7 @@ BUILD_IN_VM=1 BUILD_LINQU_DRIVER_IN_VM=1 ./sync_ub_kernel_artifacts_from_vm.sh
 cd /Volumes/repos/pypto_workspace/simulator/guest-linux/aarch64
 export AARCH64_LINUX_CC=aarch64-linux-gnu-gcc
 export HISI_UBUS_GUEST_MODULE=/Volumes/repos/pypto_workspace/simulator/guest-linux/aarch64/out/modules/hisi_ubus.ko
+export UB_UDMA_GUEST_MODULE=/Volumes/repos/pypto_workspace/simulator/guest-linux/aarch64/out/modules/udma.ko
 export LINQU_UB_GUEST_MODULE=/Volumes/repos/pypto_workspace/simulator/guest-linux/aarch64/out/modules/linqu_ub_drv.ko
 ./build_initramfs.sh
 ```
@@ -130,6 +132,7 @@ export LINQU_UB_GUEST_MODULE=/Volumes/repos/pypto_workspace/simulator/guest-linu
 - `out/initramfs/bin/linqu_urma_dp`
 - `out/initramfs/bin/insmod`
 - `out/initramfs/lib/modules/hisi_ubus.ko`
+- `out/initramfs/lib/modules/udma.ko`
 - `out/initramfs/lib/modules/linqu_ub_drv.ko`（可选）
 
 ## 6. 部署要义（双节点）
