@@ -24,6 +24,8 @@
 #define UBC_PORT_NEIGHBOR_GUID_OFFSET 0x2cULL
 #define UBC_PORT_GUID_SIZE 16
 #define UBC_RESOURCE_BASE_FALLBACK 0x18000000000ULL
+#define UB_REMOTE_CONFIG_PATH "/sys/bus/ub/devices/00002/config"
+#define UB_CFG_UPI_OFFSET 0x7cULL
 
 static bool read_file_line(const char *path, char *buf, size_t buf_size)
 {
@@ -223,6 +225,304 @@ static bool should_run_linqu_probe(void)
     return true;
 }
 
+static bool should_hold_after_probe(void)
+{
+    return cmdline_has_option("linqu_probe_hold=1");
+}
+
+static bool should_run_bizmsg_verify(void)
+{
+    return cmdline_has_option("linqu_bizmsg_verify=1");
+}
+
+static bool should_run_urma_dp_verify(void)
+{
+    return cmdline_has_option("linqu_urma_dp_verify=1");
+}
+
+static bool read_interrupt_count(const char *name, uint64_t *count_out)
+{
+    FILE *fp;
+    char line[512];
+
+    fp = fopen("/proc/interrupts", "r");
+    if (!fp) {
+        fprintf(stderr, "[init] open /proc/interrupts failed: %s\n", strerror(errno));
+        return false;
+    }
+
+    while (fgets(line, sizeof(line), fp) != NULL) {
+        char *colon;
+        char *p;
+        unsigned long long value;
+
+        if (!strstr(line, name)) {
+            continue;
+        }
+
+        colon = strchr(line, ':');
+        if (!colon) {
+            continue;
+        }
+
+        p = colon + 1;
+        while (*p == ' ' || *p == '\t') {
+            p++;
+        }
+
+        errno = 0;
+        value = strtoull(p, NULL, 10);
+        if (errno == 0) {
+            *count_out = (uint64_t)value;
+            fclose(fp);
+            return true;
+        }
+    }
+
+    fclose(fp);
+    return false;
+}
+
+static bool touch_file_for_msg(const char *path)
+{
+    int fd;
+    char buf[256];
+    ssize_t n;
+
+    fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        return false;
+    }
+
+    n = read(fd, buf, sizeof(buf));
+    close(fd);
+    return n >= 0;
+}
+
+struct bizmsg_payload_case {
+    const char *name;
+    uint64_t offset;
+    uint32_t pattern;
+    uint32_t mask;
+};
+
+static uint32_t nonzero_masked_u15(uint32_t value, uint32_t fallback)
+{
+    value &= 0x7fffU;
+    if (value == 0) {
+        return fallback & 0x7fffU;
+    }
+    return value;
+}
+
+static bool read_cfg_dword_fd(int fd, uint64_t offset, uint32_t *val_out)
+{
+    ssize_t n;
+
+    n = pread(fd, val_out, sizeof(*val_out), (off_t)offset);
+    if (n != (ssize_t)sizeof(*val_out)) {
+        return false;
+    }
+    return true;
+}
+
+static bool write_cfg_dword_fd(int fd, uint64_t offset, uint32_t val)
+{
+    ssize_t n;
+
+    n = pwrite(fd, &val, sizeof(val), (off_t)offset);
+    if (n != (ssize_t)sizeof(val)) {
+        return false;
+    }
+    return true;
+}
+
+static int run_bizmsg_payload_consistency_probe(uint64_t seed)
+{
+    struct bizmsg_payload_case cases[] = {
+        {
+            .name = "upi_case0",
+            .offset = UB_CFG_UPI_OFFSET,
+            .pattern = nonzero_masked_u15((uint32_t)seed ^ 0x1357U, 0x1U),
+            .mask = 0x7fffU,
+        },
+        {
+            .name = "upi_case1",
+            .offset = UB_CFG_UPI_OFFSET,
+            .pattern = nonzero_masked_u15((uint32_t)(seed >> 16) ^ 0x2a5aU, 0x2U),
+            .mask = 0x7fffU,
+        },
+        {
+            .name = "upi_case2",
+            .offset = UB_CFG_UPI_OFFSET,
+            .pattern = nonzero_masked_u15((uint32_t)(seed >> 32) ^ 0x55a5U, 0x4U),
+            .mask = 0x7fffU,
+        },
+    };
+    int fd;
+    int errors = 0;
+    size_t i;
+
+    fd = open(UB_REMOTE_CONFIG_PATH, O_RDWR);
+    if (fd < 0) {
+        fprintf(stderr, "[init] bizmsg payload fail: open %s failed: %s\n",
+                UB_REMOTE_CONFIG_PATH, strerror(errno));
+        return -1;
+    }
+
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        const struct bizmsg_payload_case *c = &cases[i];
+        uint32_t before = 0;
+        uint32_t after = 0;
+        uint32_t expect = 0;
+
+        if (!read_cfg_dword_fd(fd, c->offset, &before)) {
+            fprintf(stderr,
+                    "[init] bizmsg payload fail: read-before name=%s pos=0x%08" PRIx64 " err=%s\n",
+                    c->name, c->offset, strerror(errno));
+            errors++;
+            continue;
+        }
+
+        if (!write_cfg_dword_fd(fd, c->offset, c->pattern)) {
+            fprintf(stderr,
+                    "[init] bizmsg payload fail: write name=%s pos=0x%08" PRIx64 " val=0x%08" PRIx32 " err=%s\n",
+                    c->name, c->offset, c->pattern, strerror(errno));
+            errors++;
+            continue;
+        }
+
+        if (!read_cfg_dword_fd(fd, c->offset, &after)) {
+            fprintf(stderr,
+                    "[init] bizmsg payload fail: read-after name=%s pos=0x%08" PRIx64 " err=%s\n",
+                    c->name, c->offset, strerror(errno));
+            errors++;
+            (void)write_cfg_dword_fd(fd, c->offset, before);
+            continue;
+        }
+
+        expect = c->pattern & c->mask;
+        if ((after & c->mask) != expect) {
+            fprintf(stderr,
+                    "[init] bizmsg payload fail: mismatch name=%s pos=0x%08" PRIx64
+                    " tx=0x%08" PRIx32 " rx=0x%08" PRIx32 " mask=0x%08" PRIx32 "\n",
+                    c->name, c->offset, c->pattern, after, c->mask);
+            errors++;
+        } else {
+            fprintf(stderr,
+                    "[init] bizmsg payload check pass name=%s pos=0x%08" PRIx64
+                    " tx=0x%08" PRIx32 " rx=0x%08" PRIx32 " mask=0x%08" PRIx32 "\n",
+                    c->name, c->offset, c->pattern, after, c->mask);
+        }
+
+        if (!write_cfg_dword_fd(fd, c->offset, before)) {
+            fprintf(stderr,
+                    "[init] bizmsg payload fail: restore-write name=%s pos=0x%08" PRIx64
+                    " val=0x%08" PRIx32 " err=%s\n",
+                    c->name, c->offset, before, strerror(errno));
+            errors++;
+            continue;
+        }
+
+        if (!read_cfg_dword_fd(fd, c->offset, &after)) {
+            fprintf(stderr,
+                    "[init] bizmsg payload fail: restore-read name=%s pos=0x%08" PRIx64
+                    " err=%s\n",
+                    c->name, c->offset, strerror(errno));
+            errors++;
+            continue;
+        }
+
+        if ((after & c->mask) != (before & c->mask)) {
+            fprintf(stderr,
+                    "[init] bizmsg payload fail: restore-mismatch name=%s pos=0x%08" PRIx64
+                    " before=0x%08" PRIx32 " after=0x%08" PRIx32 " mask=0x%08" PRIx32 "\n",
+                    c->name, c->offset, before, after, c->mask);
+            errors++;
+        }
+    }
+
+    close(fd);
+
+    if (errors == 0) {
+        fprintf(stderr, "[init] bizmsg payload pass cases=%zu\n",
+                sizeof(cases) / sizeof(cases[0]));
+        return 0;
+    }
+
+    fprintf(stderr, "[init] bizmsg payload fail errors=%d\n", errors);
+    return -1;
+}
+
+static int run_bizmsg_roundtrip_probe(void)
+{
+    static const char *paths[] = {
+        "/sys/bus/ub/devices/00002/port0/linkup",
+        "/sys/bus/ub/devices/00002/port0/cna",
+        "/sys/bus/ub/devices/00002/port0/neighbor",
+        "/sys/bus/ub/devices/00002/port0/neighbor_guid",
+        "/sys/bus/ub/devices/00002/guid",
+        "/sys/bus/ub/devices/00002/resource",
+    };
+    char link_buf[64];
+    uint64_t before = 0;
+    uint64_t after = 0;
+    int attempt;
+    int i;
+    size_t j;
+    int errors = 0;
+
+    for (attempt = 0; attempt < 100; attempt++) {
+        if (read_file_line("/sys/bus/ub/devices/00002/port0/linkup",
+                           link_buf, sizeof(link_buf)) &&
+            strstr(link_buf, "1") != NULL) {
+            break;
+        }
+        usleep(100000);
+    }
+    if (attempt == 100) {
+        fprintf(stderr, "[init] bizmsg roundtrip fail: remote linkup not ready\n");
+        return -1;
+    }
+
+    if (!read_interrupt_count("hi_msgq0-0", &before)) {
+        fprintf(stderr, "[init] bizmsg roundtrip fail: hi_msgq0-0 missing before probe\n");
+        return -1;
+    }
+
+    for (i = 0; i < 32; i++) {
+        for (j = 0; j < sizeof(paths) / sizeof(paths[0]); j++) {
+            if (!touch_file_for_msg(paths[j])) {
+                fprintf(stderr, "[init] bizmsg read failed: %s (%s)\n", paths[j], strerror(errno));
+                errors++;
+            }
+        }
+    }
+
+    if (run_bizmsg_payload_consistency_probe(before ^ (uint64_t)getpid()) != 0) {
+        errors++;
+    }
+
+    usleep(500000);
+
+    if (!read_interrupt_count("hi_msgq0-0", &after)) {
+        fprintf(stderr, "[init] bizmsg roundtrip fail: hi_msgq0-0 missing after probe\n");
+        return -1;
+    }
+
+    fprintf(stderr,
+            "[init] bizmsg irq hi_msgq0-0 before=%" PRIu64 " after=%" PRIu64 " delta=%" PRIu64 "\n",
+            before, after, (after >= before) ? (after - before) : 0);
+
+    if (errors == 0 && after > before) {
+        fprintf(stderr, "[init] bizmsg roundtrip pass\n");
+        return 0;
+    }
+
+    fprintf(stderr, "[init] bizmsg roundtrip fail errors=%d\n", errors);
+    return -1;
+}
+
 static void run_probe(void)
 {
     pid_t pid;
@@ -248,6 +548,41 @@ static void run_probe(void)
         fprintf(stderr, "[init] linqu_probe exit=%d\n", WEXITSTATUS(status));
     } else if (WIFSIGNALED(status)) {
         fprintf(stderr, "[init] linqu_probe signal=%d\n", WTERMSIG(status));
+    }
+}
+
+static void run_urma_dp_probe(void)
+{
+    pid_t pid;
+    int status = 0;
+
+    pid = fork();
+    if (pid < 0) {
+        fprintf(stderr, "[init] fork for urma_dp failed: %s\n", strerror(errno));
+        return;
+    }
+    if (pid == 0) {
+        execl("/bin/linqu_urma_dp", "/bin/linqu_urma_dp", (char *)NULL);
+        fprintf(stderr, "[init] exec /bin/linqu_urma_dp failed: %s\n", strerror(errno));
+        _exit(127);
+    }
+
+    if (waitpid(pid, &status, 0) < 0) {
+        fprintf(stderr, "[init] waitpid urma_dp failed: %s\n", strerror(errno));
+        return;
+    }
+
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        fprintf(stderr, "[init] urma dataplane pass\n");
+        return;
+    }
+
+    if (WIFEXITED(status)) {
+        fprintf(stderr, "[init] urma dataplane fail exit=%d\n", WEXITSTATUS(status));
+    } else if (WIFSIGNALED(status)) {
+        fprintf(stderr, "[init] urma dataplane fail signal=%d\n", WTERMSIG(status));
+    } else {
+        fprintf(stderr, "[init] urma dataplane fail unknown status=0x%x\n", status);
     }
 }
 
@@ -303,6 +638,9 @@ static void dump_file(const char *path)
 static void dump_ub_state(void)
 {
     dump_dir_entries("/sys/bus");
+    dump_dir_entries("/sys/bus/auxiliary");
+    dump_dir_entries("/sys/bus/auxiliary/devices");
+    dump_dir_entries("/sys/bus/auxiliary/drivers");
     dump_dir_entries("/sys/bus/platform/devices");
     dump_dir_entries("/sys/bus/platform/drivers");
     dump_dir_entries("/sys/bus/ub");
@@ -327,9 +665,13 @@ static void dump_ub_state(void)
     dump_file("/sys/bus/ub/devices/00001/port1/neighbor_guid");
     dump_file("/sys/bus/ub/devices/00001/port1/neighbor_port_idx");
     dump_file("/sys/bus/ub/devices/00001/direct_link");
+    dump_file("/sys/bus/ub/devices/00001/vendor");
+    dump_file("/sys/bus/ub/devices/00001/device");
     dump_file("/sys/bus/ub/devices/00001/instance");
     dump_file("/sys/bus/ub/devices/00002/class_code");
     dump_file("/sys/bus/ub/devices/00002/type");
+    dump_file("/sys/bus/ub/devices/00002/vendor");
+    dump_file("/sys/bus/ub/devices/00002/device");
     dump_file("/sys/bus/ub/devices/00002/guid");
     dump_file("/sys/bus/ub/devices/00002/primary_entity");
     dump_file("/sys/bus/ub/devices/00002/instance");
@@ -341,6 +683,8 @@ static void dump_ub_state(void)
     dump_file("/sys/bus/ub/devices/00002/port0/neighbor_guid");
     dump_file("/sys/bus/ub/devices/00002/port0/neighbor_port_idx");
     dump_file("/sys/bus/ub/devices/00002/direct_link");
+    dump_dir_entries("/sys/class/net");
+    dump_dir_entries("/sys/class/ubcore");
     dump_file("/proc/interrupts");
     dump_raw_ubc_port1_state();
 }
@@ -400,6 +744,7 @@ static void try_insmod(const char *path)
 static void try_load_drivers(void)
 {
     try_insmod("/lib/modules/hisi_ubus.ko");
+    try_insmod("/lib/modules/udma.ko");
     if (cmdline_has_option("linqu_probe_load_helper=1")) {
         try_insmod("/lib/modules/linqu_ub_drv.ko");
     }
@@ -434,6 +779,54 @@ static void wait_for_ub_sysfs_ready(void)
     fprintf(stderr, "[init] ub sysfs wait timed out\n");
 }
 
+static void write_sysfs_text(const char *path, const char *text)
+{
+    int fd;
+    size_t len;
+    ssize_t n;
+
+    fd = open(path, O_WRONLY);
+    if (fd < 0) {
+        fprintf(stderr, "[init] open %s failed: %s\n", path, strerror(errno));
+        return;
+    }
+
+    len = strlen(text);
+    n = write(fd, text, len);
+    if (n != (ssize_t)len) {
+        fprintf(stderr, "[init] write %s failed: %s\n", path,
+                (n < 0) ? strerror(errno) : "short write");
+    } else {
+        fprintf(stderr, "[init] write %s <= %s", path, text);
+    }
+    close(fd);
+}
+
+static void force_bind_ubase_for_qemu(void)
+{
+    static const char *devs[] = {"00001", "00002"};
+    size_t i;
+    char path[256];
+    char text[32];
+
+    if (!cmdline_has_option("linqu_force_ubase_bind=1")) {
+        return;
+    }
+
+    for (i = 0; i < sizeof(devs) / sizeof(devs[0]); i++) {
+        snprintf(path, sizeof(path), "/sys/bus/ub/devices/%s/driver_override",
+                 devs[i]);
+        write_sysfs_text(path, "ubase\n");
+
+        snprintf(path, sizeof(path), "/sys/bus/ub/drivers/ub_generic_component/unbind");
+        snprintf(text, sizeof(text), "%s\n", devs[i]);
+        write_sysfs_text(path, text);
+
+        snprintf(path, sizeof(path), "/sys/bus/ub/drivers_probe");
+        write_sysfs_text(path, text);
+    }
+}
+
 int main(void)
 {
     puts("[init] linqu-ub linux probe");
@@ -459,12 +852,27 @@ int main(void)
     try_load_drivers();
     wait_for_ub_sysfs_ready();
     dump_ub_state();
+    if (should_run_bizmsg_verify()) {
+        run_bizmsg_roundtrip_probe();
+    }
+    force_bind_ubase_for_qemu();
+    dump_ub_state();
+    if (should_run_urma_dp_verify()) {
+        run_urma_dp_probe();
+    }
     if (should_run_linqu_probe()) {
         run_probe();
     } else {
         fprintf(stderr, "[init] linqu_probe skipped by cmdline\n");
     }
     dump_ub_state();
+
+    if (should_hold_after_probe()) {
+        fprintf(stderr, "[init] holding after probe by cmdline\n");
+        for (;;) {
+            pause();
+        }
+    }
 
     puts("[init] probe finished, powering off");
     sync();

@@ -17,6 +17,7 @@
 
 #define DT_ROOT "/proc/device-tree"
 #define FALLBACK_MMIO_BASE 0x0c000000ULL
+#define UBC_RESOURCE_BASE_FALLBACK 0x18000000000ULL
 #define LINQU_ENDPOINT1_OFFSET 0x1000ULL
 #define UART0_MMIO_BASE    0x09000000ULL
 #define PAGE_SIZE_BYTES 4096ULL
@@ -77,6 +78,52 @@ static bool read_file_bytes(const char *path, uint8_t *buf, size_t len, size_t *
 static bool cmdline_has_flag(const char *flag);
 static int try_uio_irq_probe(volatile uint64_t *ep_regs);
 static int try_guest_driver_irq_probe(volatile uint64_t *ep_regs);
+
+static bool find_ubc_resource_base_from_sysfs(uint64_t *base_out)
+{
+    DIR *dir;
+    struct dirent *ent;
+    char resource_path[512];
+    uint8_t line[256];
+    size_t n = 0;
+
+    dir = opendir("/sys/bus/platform/devices");
+    if (!dir) {
+        return false;
+    }
+
+    while ((ent = readdir(dir)) != NULL) {
+        char *space = NULL;
+        uint64_t start = 0;
+
+        if (!strstr(ent->d_name, ".ubc")) {
+            continue;
+        }
+
+        snprintf(resource_path, sizeof(resource_path),
+                 "/sys/bus/platform/devices/%s/resource", ent->d_name);
+        if (!read_file_bytes(resource_path, line, sizeof(line) - 1, &n) || n == 0) {
+            continue;
+        }
+
+        line[n] = '\0';
+        space = strchr((char *)line, ' ');
+        if (space) {
+            *space = '\0';
+        }
+
+        errno = 0;
+        start = strtoull((char *)line, NULL, 16);
+        if (errno == 0 && start != 0) {
+            *base_out = start;
+            closedir(dir);
+            return true;
+        }
+    }
+
+    closedir(dir);
+    return false;
+}
 
 static void print_hex64(const char *label, uint64_t value)
 {
@@ -1154,7 +1201,7 @@ out:
 int main(void)
 {
     struct linqu_dt_info info = {0};
-    uint64_t base = FALLBACK_MMIO_BASE;
+    uint64_t base = UBC_RESOURCE_BASE_FALLBACK;
 
     puts("linqu-ub linux probe");
     if (find_linqu_node_recursive(DT_ROOT, &info)) {
@@ -1177,7 +1224,13 @@ int main(void)
         }
     } else {
         puts("dt.node=not-found");
-        print_hex64("dt.base.fallback", base);
+        if (find_ubc_resource_base_from_sysfs(&base)) {
+            print_hex64("sysfs.ubc_base", base);
+        } else {
+            base = UBC_RESOURCE_BASE_FALLBACK;
+            print_hex64("dt.base.fallback", FALLBACK_MMIO_BASE);
+            print_hex64("sysfs.ubc_base.fallback", base);
+        }
     }
 
     probe_uart_mmio(UART0_MMIO_BASE);

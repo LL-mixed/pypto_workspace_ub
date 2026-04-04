@@ -6,6 +6,8 @@ OUT_DIR="$ROOT_DIR/out"
 INITRAMFS_DIR="$OUT_DIR/initramfs"
 PROBE_SRC="$ROOT_DIR/probe.c"
 PROBE_BIN="$OUT_DIR/linqu_probe"
+URMA_DP_SRC="$ROOT_DIR/urma_dp.c"
+URMA_DP_BIN="$OUT_DIR/linqu_urma_dp"
 INIT_SRC="$ROOT_DIR/init.c"
 INIT_BIN="$OUT_DIR/init"
 INSMOD_SRC="$ROOT_DIR/insmod.c"
@@ -13,6 +15,7 @@ INSMOD_BIN="$OUT_DIR/insmod"
 INITRAMFS_IMG="$OUT_DIR/initramfs.cpio.gz"
 LINQU_MODULE="${LINQU_UB_GUEST_MODULE:-}"
 HISI_UBUS_MODULE="${HISI_UBUS_GUEST_MODULE:-}"
+UDMA_MODULE="${UB_UDMA_GUEST_MODULE:-}"
 
 : "${AARCH64_LINUX_CC:=}"
 : "${BUSYBOX:=}"
@@ -28,12 +31,14 @@ if [[ -z "$AARCH64_LINUX_CC" ]]; then
 fi
 
 "$AARCH64_LINUX_CC" -static -O2 -Wall -Wextra "$PROBE_SRC" -o "$PROBE_BIN"
+"$AARCH64_LINUX_CC" -static -O2 -Wall -Wextra "$URMA_DP_SRC" -o "$URMA_DP_BIN"
 "$AARCH64_LINUX_CC" -static -O2 -Wall -Wextra "$INIT_SRC" -o "$INIT_BIN"
 "$AARCH64_LINUX_CC" -static -O2 -Wall -Wextra "$INSMOD_SRC" -o "$INSMOD_BIN"
 
 cp "$INIT_BIN" "$INITRAMFS_DIR/init"
 chmod +x "$INITRAMFS_DIR/init"
 cp "$PROBE_BIN" "$INITRAMFS_DIR/bin/linqu_probe"
+cp "$URMA_DP_BIN" "$INITRAMFS_DIR/bin/linqu_urma_dp"
 cp "$INSMOD_BIN" "$INITRAMFS_DIR/bin/insmod"
 
 if [[ -n "$BUSYBOX" ]]; then
@@ -47,6 +52,10 @@ fi
 
 if [[ -n "$HISI_UBUS_MODULE" ]]; then
   cp "$HISI_UBUS_MODULE" "$INITRAMFS_DIR/lib/modules/hisi_ubus.ko"
+fi
+
+if [[ -n "$UDMA_MODULE" ]]; then
+  cp "$UDMA_MODULE" "$INITRAMFS_DIR/lib/modules/udma.ko"
 fi
 
 (

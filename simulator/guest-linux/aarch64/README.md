@@ -65,3 +65,34 @@ export BUSYBOX=/path/to/busybox-aarch64
 simulator/guest-linux/aarch64/build_initramfs.sh
 simulator/guest-linux/aarch64/run_linux_probe.sh
 ```
+
+## Minimal ubcore/urma E2E (Dual Node)
+
+For the ubcore/urma minimal send/recv loop, use this order:
+
+1. Build kernel artifacts in VM (`ll@192.168.64.3`) and sync to local workspace
+2. Rebuild initramfs with synced modules
+3. Run dual-node e2e validation
+
+Example:
+
+```sh
+# 1) Build in VM and pull Image + hisi_ubus.ko + udma.ko (+linqu_ub_drv.ko if available)
+simulator/guest-linux/aarch64/sync_ub_kernel_artifacts_from_vm.sh
+
+# 2) Build guest initramfs
+export AARCH64_LINUX_CC=aarch64-linux-gnu-gcc
+export HISI_UBUS_GUEST_MODULE=/Volumes/repos/pypto_workspace/simulator/guest-linux/aarch64/out/modules/hisi_ubus.ko
+export UB_UDMA_GUEST_MODULE=/Volumes/repos/pypto_workspace/simulator/guest-linux/aarch64/out/modules/udma.ko
+export LINQU_UB_GUEST_MODULE=/Volumes/repos/pypto_workspace/simulator/guest-linux/aarch64/out/modules/linqu_ub_drv.ko
+simulator/guest-linux/aarch64/build_initramfs.sh
+
+# 3) Run minimal ubcore/urma end-to-end send/recv
+simulator/guest-linux/aarch64/run_ub_dual_node_ubcore_urma_e2e.sh
+```
+
+`run_ub_dual_node_ubcore_urma_e2e.sh` validates:
+- `Register ubcore client success.`
+- `[ipourma] Register netlink success.`
+- guest workload `/bin/linqu_urma_dp` does bidirectional socket send/recv over `ipourma`
+- both guests emit `[urma_dp] rx peer src=...` and `[init] urma dataplane pass`
