@@ -105,6 +105,8 @@ pub struct CompletionSourceStats {
     pub dfs_service: u64,
     pub db_service: u64,
     pub guest_uapi: u64,
+    #[serde(default)]
+    pub remote_node: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

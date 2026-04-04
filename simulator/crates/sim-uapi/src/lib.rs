@@ -731,6 +731,20 @@ fn submit_io_to_cq(&mut self, req: IoSubmitReq, cq: CqHandle) -> Result<u64, Sim
                 self.enqueue_to_cq(cq, event)?;
                 Ok(req.op_id)
             }
+            IoOpcode::RemoteFetch | IoOpcode::RemoteStore => {
+                /* Phase 2: remote block transport — stub for now */
+                let event = CompletionEvent {
+                    op_id: req.op_id,
+                    task: req.task,
+                    source: CompletionSource::RemoteNode,
+                    status: CompletionStatus::RetryableFailure {
+                        code: "remote_transport_not_available".to_string(),
+                    },
+                    finished_at: self.next_service_time(),
+                };
+                self.enqueue_to_cq(cq, event)?;
+                Ok(req.op_id)
+            }
         }
     }
 }

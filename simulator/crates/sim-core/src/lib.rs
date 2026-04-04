@@ -174,6 +174,8 @@ pub enum IoOpcode {
     ReadBlock,
     WriteBlock,
     Dispatch,
+    RemoteFetch,
+    RemoteStore,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -194,6 +196,7 @@ pub enum CompletionSource {
     DfsService,
     DbService,
     GuestUapi,
+    RemoteNode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -149,6 +149,7 @@ pub fn run_minimal_workload(
                 dfs_service: 0,
                 db_service: 0,
                 guest_uapi: 0,
+                remote_node: 0,
             },
             completions_by_status: CompletionStatusStats {
                 success: 0,
@@ -587,7 +588,8 @@ fn drain_and_record(
             }
             CompletionSource::ChipBackend
             | CompletionSource::DfsService
-            | CompletionSource::GuestUapi => {}
+            | CompletionSource::GuestUapi
+            | CompletionSource::RemoteNode => {}
         }
         report.events.push(SimEvent::CompletionObserved {
             at: completion.finished_at,
@@ -696,6 +698,7 @@ fn summarize_events(events: &[SimEvent]) -> EventSummary {
             dfs_service: 0,
             db_service: 0,
             guest_uapi: 0,
+            remote_node: 0,
         },
         completions_by_status: CompletionStatusStats {
             success: 0,
@@ -720,6 +723,7 @@ fn summarize_events(events: &[SimEvent]) -> EventSummary {
                     CompletionSource::DfsService => summary.completions_by_source.dfs_service += 1,
                     CompletionSource::DbService => summary.completions_by_source.db_service += 1,
                     CompletionSource::GuestUapi => summary.completions_by_source.guest_uapi += 1,
+                    CompletionSource::RemoteNode => summary.completions_by_source.remote_node += 1,
                 }
                 match &completion.status {
                     CompletionStatus::Success => summary.completions_by_status.success += 1,

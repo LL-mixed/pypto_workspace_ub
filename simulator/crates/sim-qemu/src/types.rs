@@ -112,6 +112,9 @@ impl GuestDescriptor {
                         IoOpcode::ReadBlock => 1,
                         IoOpcode::WriteBlock => 2,
                         IoOpcode::Dispatch => 3,
+                        IoOpcode::RemoteFetch | IoOpcode::RemoteStore => {
+                            return Err("remote fetch/store not yet supported in guest descriptor encoding")
+                        }
                     },
                 );
                 encode_opt_segment(&mut buf, io.segment);
@@ -376,6 +379,7 @@ pub fn encode_completion(event: &CompletionEvent, slot_bytes: usize) -> Result<V
             CompletionSource::DfsService => 4,
             CompletionSource::DbService => 5,
             CompletionSource::GuestUapi => 6,
+            CompletionSource::RemoteNode => 7,
         },
     );
     match &event.status {
@@ -404,6 +408,7 @@ pub fn decode_completion(bytes: &[u8]) -> Result<CompletionEvent, &'static str> 
         4 => CompletionSource::DfsService,
         5 => CompletionSource::DbService,
         6 => CompletionSource::GuestUapi,
+        7 => CompletionSource::RemoteNode,
         _ => return Err("invalid completion source"),
     };
     let status = match read_u8(&mut cursor)? {
