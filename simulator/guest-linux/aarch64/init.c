@@ -114,70 +114,23 @@ static bool find_ubc_resource_base(uint64_t *base_out)
 
 static void dump_raw_ubc_port1_state(void)
 {
-    uint64_t ubc_base = 0;
-    uint16_t neighbor_port_idx;
-    int fd;
-    unsigned char link_status = 0;
-    unsigned char guid[UBC_PORT_GUID_SIZE];
-    char guid_str[UBC_PORT_GUID_SIZE * 2 + 1];
-    ssize_t n;
+    static const char *paths[] = {
+        "/sys/bus/ub/devices/00001/port1/linkup",
+        "/sys/bus/ub/devices/00001/port1/neighbor_port_idx",
+        "/sys/bus/ub/devices/00001/port1/neighbor_guid",
+    };
+    char buf[256];
+    size_t i;
 
-    if (!find_ubc_resource_base(&ubc_base)) {
-        fprintf(stderr, "[init] raw ubc port1: no local .ubc platform resource found\n");
-        return;
+    for (i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
+        if (read_file_line(paths[i], buf, sizeof(buf))) {
+            fprintf(stderr, "[init] sysfs ubc port1 %s: %s\n",
+                    strrchr(paths[i], '/') + 1, buf);
+        } else {
+            fprintf(stderr, "[init] sysfs ubc port1 %s: not available\n",
+                    strrchr(paths[i], '/') + 1);
+        }
     }
-
-    fd = open("/dev/mem", O_RDONLY | O_SYNC);
-    if (fd < 0) {
-        fprintf(stderr, "[init] raw ubc port1: open /dev/mem failed: %s\n",
-                strerror(errno));
-        return;
-    }
-
-    n = pread(fd, &link_status, sizeof(link_status),
-              (off_t)(ubc_base + UBC_PORT1_SLICE_OFFSET + UBC_PORT_LINK_STATUS_OFFSET));
-    if (n != (ssize_t)sizeof(link_status)) {
-        fprintf(stderr,
-                "[init] raw ubc port1: pread linkup @0x%016" PRIx64 " failed: %s\n",
-                ubc_base + UBC_PORT1_SLICE_OFFSET + UBC_PORT_LINK_STATUS_OFFSET,
-                (n < 0) ? strerror(errno) : "short read");
-        close(fd);
-        return;
-    }
-
-    n = pread(fd, &neighbor_port_idx, sizeof(neighbor_port_idx),
-              (off_t)(ubc_base + UBC_PORT1_SLICE_OFFSET + UBC_PORT_NEIGHBOR_PORT_IDX_OFFSET));
-    if (n != (ssize_t)sizeof(neighbor_port_idx)) {
-        fprintf(stderr,
-                "[init] raw ubc port1: pread neighbor_port_idx @0x%016" PRIx64
-                " failed: %s\n",
-                ubc_base + UBC_PORT1_SLICE_OFFSET + UBC_PORT_NEIGHBOR_PORT_IDX_OFFSET,
-                (n < 0) ? strerror(errno) : "short read");
-        close(fd);
-        return;
-    }
-
-    n = pread(fd, guid, sizeof(guid),
-              (off_t)(ubc_base + UBC_PORT1_SLICE_OFFSET + UBC_PORT_NEIGHBOR_GUID_OFFSET));
-    close(fd);
-    if (n != (ssize_t)sizeof(guid)) {
-        fprintf(stderr,
-                "[init] raw ubc port1: pread neighbor_guid @0x%016" PRIx64
-                " failed: %s\n",
-                ubc_base + UBC_PORT1_SLICE_OFFSET + UBC_PORT_NEIGHBOR_GUID_OFFSET,
-                (n < 0) ? strerror(errno) : "short read");
-        return;
-    }
-
-    format_guid_be_hex(guid, guid_str, sizeof(guid_str));
-
-    fprintf(stderr,
-            "[init] raw ubc port1: base=0x%016" PRIx64
-            " linkup=%u neighbor_port_idx=%u neighbor_guid_raw=%s\n",
-            ubc_base,
-            link_status & UBC_PORT_LINK_STATUS_UP,
-            (unsigned)neighbor_port_idx,
-            guid_str);
 }
 
 static void ensure_dir(const char *path)
