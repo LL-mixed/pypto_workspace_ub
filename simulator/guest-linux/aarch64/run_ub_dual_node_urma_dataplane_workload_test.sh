@@ -227,6 +227,32 @@ wait_for_fm_links_ready() {
   return 1
 }
 
+# 快速检查实体是否就绪
+check_entity_ready() {
+  local node="$1"
+  local timeout_sec="${2:-30}"
+  local expected_count="${3:-2}"
+
+  echo "Checking entity readiness on ${node} (timeout ${timeout_sec}s, expected ${expected_count} entities)..."
+
+  local serial_log="$OUT_DIR/${node}.log"
+  local elapsed=0
+  while [ $elapsed -lt $timeout_sec ]; do
+    if [ -f "$serial_log" ]; then
+      local count=$(rg -c "entity_reg inject SUCCESS" "$serial_log" 2>/dev/null || echo "0")
+      if [ "$count" -ge "$expected_count" ]; then
+        echo "PASS: Entities ready on ${node} (${count} entities)"
+        return 0
+      fi
+    fi
+    sleep 0.5
+    elapsed=$((elapsed + 1))
+  done
+
+  echo "FAIL: Entities not ready on ${node} after ${timeout_sec}s"
+  return 1
+}
+
 dump_link_diagnostics() {
   local nodea_log="$1"
   local nodeb_log="$2"
@@ -412,6 +438,18 @@ run_iteration() {
   if ! wait_for_fm_links_ready "$nodea_log" "$nodeb_log" 30; then
     echo "iteration ${iter}: FM links failed to reach READY state within timeout" >&2
     return 11  # Exit code 11: link establishment failure
+  fi
+
+  # Check entity readiness (when UB_SIM_ENTITY_COUNT > 1)
+  if [ -n "${UB_SIM_ENTITY_COUNT:-}" ] && [ "${UB_SIM_ENTITY_COUNT:-1}" -gt "1" ]; then
+    if ! check_entity_ready "nodeA" 30 "${UB_SIM_ENTITY_COUNT}"; then
+      echo "iteration ${iter}: nodeA entities not ready within timeout" >&2
+      return 12  # Exit code 12: entity readiness failure
+    fi
+    if ! check_entity_ready "nodeB" 30 "${UB_SIM_ENTITY_COUNT}"; then
+      echo "iteration ${iter}: nodeB entities not ready within timeout" >&2
+      return 12  # Exit code 12: entity readiness failure
+    fi
   fi
 
   # Resume both nodes - now guest kernel enumeration sees stable topology
