@@ -13,6 +13,7 @@ VM_LINQU_DRIVER_DIR="${VM_LINQU_DRIVER_DIR:-/home/ll/share/shared_data/linqu_gue
 VM_IMAGE_PATH="${VM_IMAGE_PATH:-$VM_KERNEL_BUILD/arch/arm64/boot/Image}"
 VM_HISI_MODULE_PATH="${VM_HISI_MODULE_PATH:-$VM_KERNEL_BUILD/drivers/ub/ubus/vendor/hisilicon/hisi_ubus.ko}"
 VM_UDMA_MODULE_PATH="${VM_UDMA_MODULE_PATH:-$VM_KERNEL_BUILD/drivers/ub/urma/hw/udma/udma.ko}"
+VM_IPOURMA_MODULE_PATH="${VM_IPOURMA_MODULE_PATH:-$VM_KERNEL_BUILD/drivers/ub/urma/ulp/ipourma/ipourma.ko}"
 VM_LINQU_MODULE_PATH="${VM_LINQU_MODULE_PATH:-$VM_LINQU_DRIVER_DIR/linqu_ub_drv.ko}"
 
 BUILD_IN_VM="${BUILD_IN_VM:-1}"
@@ -27,6 +28,7 @@ if [[ "$BUILD_IN_VM" == "1" ]]; then
     cd '$VM_KERNEL_SRC'
     make O='$VM_KERNEL_BUILD' ARCH='$VM_ARCH' CROSS_COMPILE='$VM_CROSS_COMPILE' -j'$JOBS' Image drivers/ub/ubus/vendor/hisilicon/hisi_ubus.ko
     make O='$VM_KERNEL_BUILD' ARCH='$VM_ARCH' CROSS_COMPILE='$VM_CROSS_COMPILE' -j'$JOBS' M=drivers/ub/urma/hw/udma modules
+    make O='$VM_KERNEL_BUILD' ARCH='$VM_ARCH' CROSS_COMPILE='$VM_CROSS_COMPILE' -j'$JOBS' M=drivers/ub/urma/ulp/ipourma modules
   "
 
   if [[ "$BUILD_LINQU_DRIVER_IN_VM" == "1" ]]; then
@@ -52,6 +54,12 @@ else
   echo "[sync] warn: failed to copy udma.ko from $VM_HOST:$VM_UDMA_MODULE_PATH" >&2
 fi
 
+if scp "$VM_HOST:$VM_IPOURMA_MODULE_PATH" "$MODULES_DIR/ipourma.ko"; then
+  :
+else
+  echo "[sync] warn: failed to copy ipourma.ko from $VM_HOST:$VM_IPOURMA_MODULE_PATH" >&2
+fi
+
 if scp "$VM_HOST:$VM_LINQU_MODULE_PATH" "$MODULES_DIR/linqu_ub_drv.ko"; then
   :
 else
@@ -63,6 +71,9 @@ echo "[sync]   $OUT_DIR/Image"
 echo "[sync]   $MODULES_DIR/hisi_ubus.ko"
 if [[ -f "$MODULES_DIR/udma.ko" ]]; then
   echo "[sync]   $MODULES_DIR/udma.ko"
+fi
+if [[ -f "$MODULES_DIR/ipourma.ko" ]]; then
+  echo "[sync]   $MODULES_DIR/ipourma.ko"
 fi
 if [[ -f "$MODULES_DIR/linqu_ub_drv.ko" ]]; then
   echo "[sync]   $MODULES_DIR/linqu_ub_drv.ko"
