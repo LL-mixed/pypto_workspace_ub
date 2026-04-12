@@ -4,7 +4,6 @@ setopt null_glob
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKSPACE_ROOT="$(cd "$ROOT_DIR/../../.." && pwd)"
-QEMU_BIN="${QEMU_BIN:-}"
 KERNEL_IMAGE="${KERNEL_IMAGE:-$ROOT_DIR/out/Image}"
 INITRAMFS_IMAGE="${INITRAMFS_IMAGE:-$ROOT_DIR/out/initramfs.cpio.gz}"
 TOPOLOGY_FILE="${TOPOLOGY_FILE:-/Volumes/repos/pypto_workspace/simulator/vendor/ub_topology_two_node_v0.ini}"
@@ -14,10 +13,11 @@ ITERATIONS="${ITERATIONS:-1}"
 START_GAP_SECS="${START_GAP_SECS:-3}"
 LINK_WAIT_SECS="${LINK_WAIT_SECS:-45}"
 QEMU_KEEP_ALIVE_ON_POWEROFF="${QEMU_KEEP_ALIVE_ON_POWEROFF:-0}"
-BASE_APPEND_EXTRA="${APPEND_EXTRA:-linqu_probe_skip=1 linqu_probe_load_helper=1 linqu_bizmsg_verify=1 linqu_force_ubase_bind=1 linqu_urma_dp_verify=1}"
+BASE_APPEND_EXTRA="${APPEND_EXTRA:-linqu_probe_skip=1 linqu_probe_load_helper=1 linqu_bizmsg_verify=1 linqu_urma_dp_verify=1}"
 ENTITY_PLAN_FILE="${UB_FM_ENTITY_PLAN_FILE:-/Volumes/repos/pypto_workspace/simulator/vendor/ub_topology_two_node_v2_entity.ini}"
 ENTITY_COUNT="${UB_SIM_ENTITY_COUNT:-2}"
 OUT_DIR="$ROOT_DIR/out"
+LOG_DIR="$ROOT_DIR/logs"
 QMP_DIR="${UB_FM_SHARED_DIR:-/tmp/ub-qemu-links-dual}/qmp"
 BENCH_PKTS="${BENCH_PKTS:-0}"
 BENCH_INTERVAL_US="${BENCH_INTERVAL_US:-1000}"
@@ -29,52 +29,15 @@ BENCH_MAX_LOSS_PPM_GATE="${BENCH_MAX_LOSS_PPM_GATE:-$BENCH_MAX_LOSS_PPM}"
 MIN_PASS_RATE_PERCENT="${MIN_PASS_RATE_PERCENT:-100}"
 REPORT_FILE="${REPORT_FILE:-$OUT_DIR/urma_dp_workload_report.latest.txt}"
 APPEND_EXTRA="$BASE_APPEND_EXTRA"
+RUN_ID="${RUN_ID:-$(date +%Y-%m-%d_%H-%M-%S)_${RANDOM}}"
+
+source "$ROOT_DIR/qemu_ub_common.sh"
+QEMU_BIN="$(ensure_qemu_ub_binary "$WORKSPACE_ROOT")"
+ensure_ub_guest_artifacts "$ROOT_DIR" "$KERNEL_IMAGE" "$INITRAMFS_IMAGE"
 
 if (( BENCH_PKTS > 0 )); then
   APPEND_EXTRA="$APPEND_EXTRA linqu_urma_dp_bench_pkts=${BENCH_PKTS} linqu_urma_dp_bench_interval_us=${BENCH_INTERVAL_US} linqu_urma_dp_bench_wait_ms=${BENCH_WAIT_MS} linqu_urma_dp_bench_min_rx_pps=${BENCH_MIN_RX_PPS} linqu_urma_dp_bench_max_loss_ppm=${BENCH_MAX_LOSS_PPM}"
 fi
-
-qemu_supports_ub_opts() {
-  local bin="$1"
-  "$bin" -M virt,help 2>/dev/null | rg -q "ub-cluster-mode|ummu"
-}
-
-resolve_qemu_bin() {
-  local candidates=(
-    "$WORKSPACE_ROOT/simulator/vendor/qemu_8.2.0_ub/build/qemu-system-aarch64"
-    "/tmp/ub-qemu-build-dp/qemu-system-aarch64"
-    "/tmp/ub-qemu-build-verify/qemu-system-aarch64"
-    "$WORKSPACE_ROOT/simulator/vendor/qemu/build/qemu-system-aarch64"
-  )
-  local candidate=""
-
-  if [[ -n "$QEMU_BIN" ]]; then
-    if [[ ! -x "$QEMU_BIN" ]]; then
-      echo "QEMU_BIN not found or not executable: $QEMU_BIN" >&2
-      return 1
-    fi
-    if ! qemu_supports_ub_opts "$QEMU_BIN"; then
-      echo "QEMU_BIN does not expose UB machine options (expected ummu/ub-cluster-mode): $QEMU_BIN" >&2
-      return 1
-    fi
-    return 0
-  fi
-
-  for candidate in "${candidates[@]}"; do
-    if [[ -x "$candidate" ]] && qemu_supports_ub_opts "$candidate"; then
-      QEMU_BIN="$candidate"
-      return 0
-    fi
-  done
-
-  echo "No UB-capable qemu-system-aarch64 found." >&2
-  echo "Checked candidates:" >&2
-  printf '  %s\n' "${candidates[@]}" >&2
-  echo "Set QEMU_BIN explicitly to a UB-enabled build." >&2
-  return 1
-}
-
-resolve_qemu_bin
 
 cleanup_pid() {
   local pid_file="$1"
@@ -162,9 +125,10 @@ extract_metric_from_summary() {
 start_node() {
   local node_id="$1"
   local role="$2"
-  local serial_log="$3"
-  local pid_file="$4"
-  local qmp_socket="$5"
+  local guest_log="$3"
+  local qemu_log="$4"
+  local pid_file="$5"
+  local qmp_socket="$6"
   local qemu_extra=()
 
   if [[ "$QEMU_KEEP_ALIVE_ON_POWEROFF" == "1" ]]; then
@@ -172,6 +136,8 @@ start_node() {
   fi
 
   mkdir -p "$(dirname "$qmp_socket")"
+  mkdir -p "$(dirname "$guest_log")"
+  mkdir -p "$(dirname "$qemu_log")"
 
   env \
     UB_FM_NODE_ID="$node_id" \
@@ -187,12 +153,12 @@ start_node() {
       -nodefaults \
       -nographic \
       -qmp unix:"$qmp_socket",server=on,wait=off \
-      -serial stdio \
+      -serial file:"$guest_log" \
       "${qemu_extra[@]}" \
       -kernel "$KERNEL_IMAGE" \
       -initrd "$INITRAMFS_IMAGE" \
       -append "console=ttyAMA0 rdinit=/init linqu_urma_dp_role=${role} ${APPEND_EXTRA}" \
-      >"$serial_log" 2>&1 &
+      >"$qemu_log" 2>&1 &
   echo $! > "$pid_file"
 }
 
@@ -264,21 +230,15 @@ wait_for_fm_links_ready() {
 # 快速检查实体是否就绪
 check_entity_ready() {
   local node="$1"
-  local timeout_sec="${2:-30}"
-  local expected_count="${3:-2}"
+  local log_file="$2"
+  local timeout_sec="${3:-30}"
+  local expected_count="${4:-2}"
 
   echo "Checking entity readiness on ${node} (timeout ${timeout_sec}s, expected ${expected_count} entities)..."
 
   local elapsed=0
   while [ $elapsed -lt $timeout_sec ]; do
-    local log_file=""
-    for f in $OUT_DIR/ub_${node}.urma_dp.*.log; do
-      if [[ -f "$f" ]]; then
-        log_file="$f"
-        break
-      fi
-    done
-    if [[ -n "$log_file" ]]; then
+    if [[ -f "$log_file" ]]; then
       # Accept either entity_reg injection, entity_table_init present state,
       # or entity_plan loaded present entries (for simulated entity plans).
       local count=$(rg -c "entity_reg inject SUCCESS|entity_table_init:.*state=present|entity_plan: loaded entity .* state=present" "$log_file" 2>/dev/null || echo "0")
@@ -473,8 +433,15 @@ check_link_early_or_fail() {
 
 run_iteration() {
   local iter="$1"
-  local nodea_log="$OUT_DIR/ub_nodeA.urma_dp.${iter}.log"
-  local nodeb_log="$OUT_DIR/ub_nodeB.urma_dp.${iter}.log"
+  local iter_log_dir="$LOG_DIR/${RUN_ID}_urma_dp_iter${iter}"
+  local nodea_guest_log="$iter_log_dir/nodeA_guest.log"
+  local nodeb_guest_log="$iter_log_dir/nodeB_guest.log"
+  local nodea_qemu_log="$iter_log_dir/nodeA_qemu.log"
+  local nodeb_qemu_log="$iter_log_dir/nodeB_qemu.log"
+  local nodea_log_link="$OUT_DIR/ub_nodeA.urma_dp.${iter}.log"
+  local nodeb_log_link="$OUT_DIR/ub_nodeB.urma_dp.${iter}.log"
+  local nodea_qemu_log_link="$OUT_DIR/ub_nodeA.urma_dp.${iter}.qemu.log"
+  local nodeb_qemu_log_link="$OUT_DIR/ub_nodeB.urma_dp.${iter}.qemu.log"
   local nodea_pid_file="$OUT_DIR/ub_nodeA.urma_dp.${iter}.pid"
   local nodeb_pid_file="$OUT_DIR/ub_nodeB.urma_dp.${iter}.pid"
   local nodea_qmp="$QMP_DIR/nodeA.${iter}.sock"
@@ -485,23 +452,31 @@ run_iteration() {
   cleanup_pid "$nodea_pid_file"
   cleanup_pid "$nodeb_pid_file"
 
+  mkdir -p "$OUT_DIR"
+  mkdir -p "$LOG_DIR"
+  mkdir -p "$iter_log_dir"
   mkdir -p "$SHARED_DIR"
   mkdir -p "$QMP_DIR"
   stale_files=("$SHARED_DIR"/*.ini "$SHARED_DIR"/*.kick "$SHARED_DIR"/*.lock)
   if (( ${#stale_files[@]} )); then
     rm -f "${stale_files[@]}"
   fi
-  rm -f "$nodea_log" "$nodeb_log"
+  rm -f "$nodea_guest_log" "$nodeb_guest_log" "$nodea_qemu_log" "$nodeb_qemu_log"
+  ln -sfn "$nodea_guest_log" "$nodea_log_link"
+  ln -sfn "$nodeb_guest_log" "$nodeb_log_link"
+  ln -sfn "$nodea_qemu_log" "$nodea_qemu_log_link"
+  ln -sfn "$nodeb_qemu_log" "$nodeb_qemu_log_link"
+  echo "iteration ${iter} logs: $iter_log_dir"
 
   # Start both nodes in PAUSED state
   echo "Starting nodeA (paused)..."
-  start_node "nodeA" "nodeA" "$nodea_log" "$nodea_pid_file" "$nodea_qmp"
+  start_node "nodeA" "nodeA" "$nodea_guest_log" "$nodea_qemu_log" "$nodea_pid_file" "$nodea_qmp"
   sleep 0.5
   echo "Starting nodeB (paused)..."
-  start_node "nodeB" "nodeB" "$nodeb_log" "$nodeb_pid_file" "$nodeb_qmp"
+  start_node "nodeB" "nodeB" "$nodeb_guest_log" "$nodeb_qemu_log" "$nodeb_pid_file" "$nodeb_qmp"
 
   # Early fail-fast check - detect failures before waiting for ready
-  if ! check_link_early_or_fail "$nodea_log" "$nodeb_log" 10; then
+  if ! check_link_early_or_fail "$nodea_qemu_log" "$nodeb_qemu_log" 10; then
     echo "iteration ${iter}: early link failure detected" >&2
     return 11  # Exit code 11: link establishment failure
   fi
@@ -511,18 +486,18 @@ run_iteration() {
   cont_qemu "$nodeb_qmp" "nodeB"
 
   # Wait for FM links to be ready (Ready Contract requires virtual clock to advance)
-  if ! wait_for_fm_links_ready "$nodea_log" "$nodeb_log" 30; then
+  if ! wait_for_fm_links_ready "$nodea_qemu_log" "$nodeb_qemu_log" 30; then
     echo "iteration ${iter}: FM links failed to reach READY state within timeout" >&2
     return 11  # Exit code 11: link establishment failure
   fi
 
   # Check entity readiness (when ENTITY_COUNT > 1)
   if [ "$ENTITY_COUNT" -gt "1" ]; then
-    if ! check_entity_ready "nodeA" 30 "$ENTITY_COUNT"; then
+    if ! check_entity_ready "nodeA" "$nodea_qemu_log" 30 "$ENTITY_COUNT"; then
       echo "iteration ${iter}: nodeA entities not ready within timeout" >&2
       return 12  # Exit code 12: entity readiness failure
     fi
-    if ! check_entity_ready "nodeB" 30 "$ENTITY_COUNT"; then
+    if ! check_entity_ready "nodeB" "$nodeb_qemu_log" 30 "$ENTITY_COUNT"; then
       echo "iteration ${iter}: nodeB entities not ready within timeout" >&2
       return 12  # Exit code 12: entity readiness failure
     fi
@@ -539,7 +514,7 @@ run_iteration() {
     return 1
   fi
 
-  wait_for_log_pass_or_fail "$nodea_log" "\\[init\\] urma dataplane pass" "\\[init\\] urma dataplane fail|\\[urma_dp\\] fail" "$RUN_SECS"
+  wait_for_log_pass_or_fail "$nodea_guest_log" "\\[init\\] urma dataplane pass" "\\[init\\] urma dataplane fail|\\[urma_dp\\] fail" "$RUN_SECS"
   case "$?" in
     0) ;;
     1)
@@ -552,7 +527,7 @@ run_iteration() {
       ;;
   esac
 
-  wait_for_log_pass_or_fail "$nodeb_log" "\\[init\\] urma dataplane pass" "\\[init\\] urma dataplane fail|\\[urma_dp\\] fail" "$RUN_SECS"
+  wait_for_log_pass_or_fail "$nodeb_guest_log" "\\[init\\] urma dataplane pass" "\\[init\\] urma dataplane fail|\\[urma_dp\\] fail" "$RUN_SECS"
   case "$?" in
     0) ;;
     1)
@@ -569,13 +544,17 @@ run_iteration() {
   cleanup_pid "$nodea_pid_file"
   cleanup_pid "$nodeb_pid_file"
 
-  echo "=== nodeA(urma_dp:${iter}) ==="
-  tail -n 120 "$nodea_log"
-  echo "=== nodeB(urma_dp:${iter}) ==="
-  tail -n 120 "$nodeb_log"
+  echo "=== nodeA guest(urma_dp:${iter}) ==="
+  tail -n 120 "$nodea_guest_log"
+  echo "=== nodeB guest(urma_dp:${iter}) ==="
+  tail -n 120 "$nodeb_guest_log"
+  echo "=== nodeA qemu(urma_dp:${iter}) ==="
+  tail -n 80 "$nodea_qemu_log"
+  echo "=== nodeB qemu(urma_dp:${iter}) ==="
+  tail -n 80 "$nodeb_qemu_log"
 
-  validate_urma_dp_log "nodeA" "$nodea_log"
-  validate_urma_dp_log "nodeB" "$nodeb_log"
+  validate_urma_dp_log "nodeA" "$nodea_guest_log"
+  validate_urma_dp_log "nodeB" "$nodeb_guest_log"
 
   echo "iteration ${iter}: dual-node URMA dataplane workload pass"
 }
@@ -631,6 +610,8 @@ echo "Pass rate: ${pass_rate}% (required >= ${MIN_PASS_RATE_PERCENT}%)" >&2
   echo "iterations=${ITERATIONS}"
   echo "run_secs=${RUN_SECS}"
   echo "start_gap_secs=${START_GAP_SECS}"
+  echo "run_id=${RUN_ID}"
+  echo "logs_dir=${LOG_DIR}"
   echo "bench_pkts=${BENCH_PKTS}"
   echo "bench_interval_us=${BENCH_INTERVAL_US}"
   echo "bench_wait_ms=${BENCH_WAIT_MS}"

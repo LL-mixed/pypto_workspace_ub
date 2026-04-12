@@ -14,20 +14,90 @@ INSMOD_SRC="$ROOT_DIR/insmod.c"
 INSMOD_BIN="$OUT_DIR/insmod"
 INIT_MANUAL_BIND_SRC="$ROOT_DIR/init_manual_bind.c"
 INIT_MANUAL_BIND_BIN="$OUT_DIR/init_manual_bind"
+CHAT_SRC="$ROOT_DIR/ub_chat.c"
+CHAT_BIN="$OUT_DIR/linqu_ub_chat"
+RPC_SRC="$ROOT_DIR/ub_rpc_demo.c"
+RPC_BIN="$OUT_DIR/linqu_ub_rpc"
+RDMA_SRC="$ROOT_DIR/ub_rdma_demo.c"
+RDMA_BIN="$OUT_DIR/linqu_ub_rdma_demo"
 INIT_BIN_TO_USE="${INIT_TO_USE:-$INIT_BIN}"
 INITRAMFS_IMG="$OUT_DIR/initramfs.cpio.gz"
+
 LINQU_MODULE="${LINQU_UB_GUEST_MODULE:-}"
 HISI_UBUS_MODULE="${HISI_UBUS_GUEST_MODULE:-}"
+UBUS_MODULE="${UB_UBUS_GUEST_MODULE:-}"
+UBASE_MODULE="${UB_UBASE_GUEST_MODULE:-}"
+UBCORE_MODULE="${UB_UBCORE_GUEST_MODULE:-}"
 UDMA_MODULE="${UB_UDMA_GUEST_MODULE:-}"
 IPOURMA_MODULE="${UB_IPOURMA_GUEST_MODULE:-}"
+UBURMA_MODULE="${UB_URMA_GUEST_MODULE:-}"
+UMMU_CORE_MODULE="${UB_UMMU_CORE_GUEST_MODULE:-}"
+UMMU_MODULE="${UB_UMMU_GUEST_MODULE:-}"
+
 COPY_ALL_KO="${COPY_ALL_KO:-0}"
+ALLOW_OUT_DIR_MODULE_FALLBACK="${ALLOW_OUT_DIR_MODULE_FALLBACK:-0}"
 
 : "${AARCH64_LINUX_CC:=}"
 : "${BUSYBOX:=}"
 
+resolve_module_path() {
+  local explicit_path="$1"
+  local module_name="$2"
+  local candidate=""
+
+  if [[ -n "$explicit_path" ]]; then
+    echo "$explicit_path"
+    return 0
+  fi
+
+  candidate="$OUT_DIR/modules/$module_name"
+  if [[ -f "$candidate" ]]; then
+    echo "$candidate"
+    return 0
+  fi
+
+  if [[ "$ALLOW_OUT_DIR_MODULE_FALLBACK" == "1" ]]; then
+    candidate="$OUT_DIR/$module_name"
+    if [[ -f "$candidate" ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  fi
+
+  echo ""
+}
+
+copy_module_if_present() {
+  local src="$1"
+  local dst_name="$2"
+  local required="$3"
+  local resolved=""
+
+  resolved="$(resolve_module_path "$src" "$dst_name")"
+  if [[ -z "$resolved" ]]; then
+    if [[ "$required" == "1" ]]; then
+      echo "[build_initramfs] warn: missing required module $dst_name" >&2
+    fi
+    return 0
+  fi
+
+  if [[ ! -f "$resolved" ]]; then
+    echo "[build_initramfs] warn: module path not found: $resolved" >&2
+    return 0
+  fi
+
+  cp "$resolved" "$INITRAMFS_DIR/lib/modules/$dst_name"
+}
+
 mkdir -p "$OUT_DIR"
 rm -rf "$INITRAMFS_DIR"
-mkdir -p "$INITRAMFS_DIR/bin" "$INITRAMFS_DIR/dev" "$INITRAMFS_DIR/proc" "$INITRAMFS_DIR/sys" "$INITRAMFS_DIR/tmp" "$INITRAMFS_DIR/lib/modules"
+mkdir -p \
+  "$INITRAMFS_DIR/bin" \
+  "$INITRAMFS_DIR/dev" \
+  "$INITRAMFS_DIR/proc" \
+  "$INITRAMFS_DIR/sys" \
+  "$INITRAMFS_DIR/tmp" \
+  "$INITRAMFS_DIR/lib/modules"
 
 if [[ -z "$AARCH64_LINUX_CC" ]]; then
   echo "AARCH64_LINUX_CC is required" >&2
@@ -40,20 +110,24 @@ fi
 "$AARCH64_LINUX_CC" -static -O2 -Wall -Wextra "$INIT_SRC" -o "$INIT_BIN"
 "$AARCH64_LINUX_CC" -static -O2 -Wall -Wextra "$INSMOD_SRC" -o "$INSMOD_BIN"
 "$AARCH64_LINUX_CC" -static -O2 -Wall -Wextra "$INIT_MANUAL_BIND_SRC" -o "$INIT_MANUAL_BIND_BIN"
+"$AARCH64_LINUX_CC" -static -O2 -Wall -Wextra "$CHAT_SRC" -o "$CHAT_BIN"
+"$AARCH64_LINUX_CC" -static -O2 -Wall -Wextra "$RPC_SRC" -o "$RPC_BIN"
+"$AARCH64_LINUX_CC" -static -O2 -Wall -Wextra "$RDMA_SRC" -o "$RDMA_BIN"
 
 cp "$INIT_BIN_TO_USE" "$INITRAMFS_DIR/init"
 chmod +x "$INITRAMFS_DIR/init"
 cp "$PROBE_BIN" "$INITRAMFS_DIR/bin/linqu_probe"
 cp "$URMA_DP_BIN" "$INITRAMFS_DIR/bin/linqu_urma_dp"
 cp "$INSMOD_BIN" "$INITRAMFS_DIR/bin/insmod"
+cp "$CHAT_BIN" "$INITRAMFS_DIR/bin/linqu_ub_chat"
+cp "$RPC_BIN" "$INITRAMFS_DIR/bin/linqu_ub_rpc"
+cp "$RDMA_BIN" "$INITRAMFS_DIR/bin/linqu_ub_rdma_demo"
 
 if [[ -n "$BUSYBOX" ]]; then
   cp "$BUSYBOX" "$INITRAMFS_DIR/bin/busybox"
   chmod +x "$INITRAMFS_DIR/bin/busybox"
 fi
 
-# Optionally copy all .ko files from out directory.
-# Keep default off to avoid mixing stale modules with explicitly provided artifacts.
 if [[ "$COPY_ALL_KO" == "1" ]] && [[ -d "$OUT_DIR" ]]; then
   for ko_file in "$OUT_DIR"/*.ko; do
     if [[ -f "$ko_file" ]]; then
@@ -62,31 +136,19 @@ if [[ "$COPY_ALL_KO" == "1" ]] && [[ -d "$OUT_DIR" ]]; then
   done
 fi
 
-if [[ -n "$LINQU_MODULE" ]]; then
-  cp "$LINQU_MODULE" "$INITRAMFS_DIR/lib/modules/linqu_ub_drv.ko"
-fi
+copy_module_if_present "$LINQU_MODULE" "linqu_ub_drv.ko" 0
+copy_module_if_present "$HISI_UBUS_MODULE" "hisi_ubus.ko" 1
+copy_module_if_present "$UBUS_MODULE" "ubus.ko" 0
+copy_module_if_present "$UBASE_MODULE" "ubase.ko" 0
+copy_module_if_present "$UBCORE_MODULE" "ubcore.ko" 0
+copy_module_if_present "$UDMA_MODULE" "udma.ko" 1
+copy_module_if_present "$IPOURMA_MODULE" "ipourma.ko" 0
+copy_module_if_present "$UBURMA_MODULE" "uburma.ko" 0
+copy_module_if_present "$UMMU_CORE_MODULE" "ummu-core.ko" 0
+copy_module_if_present "$UMMU_MODULE" "ummu.ko" 0
 
-if [[ -n "$HISI_UBUS_MODULE" ]]; then
-  cp "$HISI_UBUS_MODULE" "$INITRAMFS_DIR/lib/modules/hisi_ubus.ko"
-fi
-
-if [[ -n "$UDMA_MODULE" ]]; then
-  cp "$UDMA_MODULE" "$INITRAMFS_DIR/lib/modules/udma.ko"
-fi
-
-if [[ -n "$IPOURMA_MODULE" ]]; then
-  cp "$IPOURMA_MODULE" "$INITRAMFS_DIR/lib/modules/ipourma.ko"
-fi
-
-# Copy UMMU modules if they exist
-UMMU_CORE_MODULE="${UB_UMMU_CORE_GUEST_MODULE:-}"
-UMMU_MODULE="${UB_UMMU_GUEST_MODULE:-}"
-if [[ -n "$UMMU_CORE_MODULE" && -f "$UMMU_CORE_MODULE" ]]; then
-  cp "$UMMU_CORE_MODULE" "$INITRAMFS_DIR/lib/modules/ummu-core.ko"
-fi
-if [[ -n "$UMMU_MODULE" && -f "$UMMU_MODULE" ]]; then
-  cp "$UMMU_MODULE" "$INITRAMFS_DIR/lib/modules/ummu.ko"
-fi
+echo "[build_initramfs] packaged modules:"
+ls -1 "$INITRAMFS_DIR/lib/modules" | sed 's/^/[build_initramfs]   /'
 
 (
   cd "$INITRAMFS_DIR"
