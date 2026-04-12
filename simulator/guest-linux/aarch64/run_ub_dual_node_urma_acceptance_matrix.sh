@@ -4,9 +4,10 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OUT_DIR="$ROOT_DIR/out"
 MATRIX_OUT_DIR="${MATRIX_OUT_DIR:-$OUT_DIR/acceptance_matrix}"
-BASE_APPEND_EXTRA="${APPEND_EXTRA:-linqu_probe_skip=1 linqu_probe_load_helper=1 linqu_bizmsg_verify=1 linqu_force_ubase_bind=1 linqu_urma_dp_verify=1}"
+BASE_APPEND_EXTRA="${APPEND_EXTRA:-linqu_probe_skip=1 linqu_probe_load_helper=1 linqu_bizmsg_verify=1 linqu_urma_dp_verify=1}"
 SUMMARY_FILE="${SUMMARY_FILE:-$MATRIX_OUT_DIR/summary.txt}"
 MATRIX_CASES="${MATRIX_CASES:-all}"
+RUN_ID_BASE="${RUN_ID:-$(date +%Y-%m-%d_%H-%M-%S)_matrix_${RANDOM}}"
 
 mkdir -p "$MATRIX_OUT_DIR"
 : > "$SUMMARY_FILE"
@@ -24,6 +25,7 @@ run_case() {
   local min_pass_rate="${10}"
   local case_log="$MATRIX_OUT_DIR/${name}.log"
   local case_report="$MATRIX_OUT_DIR/${name}.report.txt"
+  local case_run_id="${RUN_ID_BASE}_${name}"
   local rc=0
 
   echo "[matrix] case=${name} iter=${iterations} run_secs=${run_secs} bench_pkts=${bench_pkts} min_rx_pps=${min_rx_pps} max_loss_ppm=${max_loss_ppm}"
@@ -40,6 +42,7 @@ run_case() {
     BENCH_MAX_LOSS_PPM="$max_loss_ppm" \
     BENCH_MAX_LOSS_PPM_GATE="$max_loss_ppm" \
     MIN_PASS_RATE_PERCENT="$min_pass_rate" \
+    RUN_ID="$case_run_id" \
     REPORT_FILE="$case_report" \
     "$ROOT_DIR/run_ub_dual_node_urma_dataplane_workload_test.sh" >"$case_log" 2>&1; then
     rc=0
@@ -52,6 +55,7 @@ run_case() {
     echo "rc=${rc}"
     echo "log=${case_log}"
     echo "report=${case_report}"
+    echo "run_id=${case_run_id}"
     if [[ -f "$case_report" ]]; then
       rg -n "^passed=|^failed=|^pass_rate_percent=|^iteration_.*_nodeA_bench=|^iteration_.*_nodeB_bench=" "$case_report" || true
     fi

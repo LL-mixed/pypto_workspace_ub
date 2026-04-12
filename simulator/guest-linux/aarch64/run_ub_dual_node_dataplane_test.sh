@@ -2,10 +2,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ITERATIONS="${ITERATIONS:-1}"
-RUN_SECS="${RUN_SECS:-120}"
-START_GAP_SECS="${START_GAP_SECS:-3}"
-RUN_ID_BASE="${RUN_ID:-$(date +%Y-%m-%d_%H-%M-%S)_ubcore_e2e_${RANDOM}}"
+ITERATIONS="${ITERATIONS:-3}"
+RUN_SECS="${RUN_SECS:-40}"
+START_GAP_SECS="${START_GAP_SECS:-1}"
+RUN_ID_BASE="${RUN_ID:-$(date +%Y-%m-%d_%H-%M-%S)_dataplane_${RANDOM}}"
 APPEND_EXTRA="${APPEND_EXTRA:-linqu_probe_skip=1 linqu_probe_load_helper=1 linqu_bizmsg_verify=1 linqu_urma_dp_verify=1}"
 
 APPEND_EXTRA="$APPEND_EXTRA" \
@@ -14,5 +14,3 @@ ITERATIONS="$ITERATIONS" \
 START_GAP_SECS="$START_GAP_SECS" \
 RUN_ID="$RUN_ID_BASE" \
 "$ROOT_DIR/run_ub_dual_node_urma_dataplane_workload_test.sh"
-
-echo "dual-node ubcore/urma minimal send-recv e2e passed (${ITERATIONS} iterations)"
