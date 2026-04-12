@@ -44,6 +44,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "../kernel_ub/include/uapi/linux/ummu_core.h"
 #include "uburma_cmd_user_compat.h"
 
 /* ---------- constants ---------- */
@@ -58,10 +59,12 @@
 
 struct rdma_resources {
     int fd;
+    int ummu_fd;
     uint32_t jfc_id;
     uint32_t jfr_id;
     uint32_t jfs_id;
     uint32_t jetty_id;
+    uint32_t ummu_tid;
     uint64_t jfc_handle;
     uint64_t jfr_handle;
     uint64_t jfs_handle;
@@ -71,6 +74,7 @@ struct rdma_resources {
     uint64_t token_id_handle;
     uint64_t seg_handle;
     bool ctx_created;
+    bool ummu_tid_allocated;
     bool jfc_alloc;
     bool jfr_alloc;
     bool jfs_alloc;
@@ -641,6 +645,11 @@ enum uburma_cmd_register_seg_type {
     REGISTER_SEG_OUT_NUM,
 };
 
+enum uburma_cmd_unregister_seg_type {
+    UNREGISTER_SEG_IN_HANDLE,
+    UNREGISTER_SEG_IN_NUM,
+};
+
 enum uburma_cmd_alloc_jfs_type {
     ALLOC_JFS_IN_DEPTH,
     ALLOC_JFS_IN_FLAG,
@@ -942,6 +951,13 @@ static void uburma_free_token_id_fill_spec_in(void *arg_addr, struct uburma_cmd_
     struct uburma_cmd_spec *s = spec;
     SPEC(s++, FREE_TOKEN_ID_IN_HANDLE, arg->in.handle);
     SPEC(s++, FREE_TOKEN_ID_IN_TOKEN_ID, arg->in.token_id);
+}
+
+static void uburma_unregister_seg_fill_spec_in(void *arg_addr, struct uburma_cmd_spec *spec)
+{
+    struct uburma_cmd_unregister_seg *arg = arg_addr;
+    struct uburma_cmd_spec *s = spec;
+    SPEC(s++, UNREGISTER_SEG_IN_HANDLE, arg->in.handle);
 }
 
 static void uburma_register_seg_fill_spec_in(void *arg_addr, struct uburma_cmd_spec *spec)
@@ -1340,6 +1356,11 @@ static int build_tlv_specs(uint32_t cmd, void *arg,
         *in_count = FREE_TOKEN_ID_IN_NUM;
         *out_count = 0;
         return 0;
+    case UBURMA_CMD_UNREGISTER_SEG:
+        uburma_unregister_seg_fill_spec_in(arg, in_specs);
+        *in_count = UNREGISTER_SEG_IN_NUM;
+        *out_count = 0;
+        return 0;
     case UBURMA_CMD_ALLOC_JFC:
         uburma_alloc_jfc_fill_spec_in(arg, in_specs);
         uburma_alloc_jfc_fill_spec_out(arg, out_specs);
@@ -1512,6 +1533,44 @@ static int open_uburma_device(const char *dev_name)
     return fd;
 }
 
+static int open_ummu_tid_device(void)
+{
+    int fd;
+
+    fd = open(TID_DEVICE_NAME, O_RDWR | O_CLOEXEC);
+    if (fd < 0) {
+        fprintf(stderr, "[ub_rdma] open %s failed: %s\n",
+                TID_DEVICE_NAME, strerror(errno));
+        return -1;
+    }
+    return fd;
+}
+
+static int alloc_ummu_tid(int fd, uint32_t *tid_out)
+{
+    struct ummu_tid_info info;
+
+    memset(&info, 0, sizeof(info));
+    info.mode = MAPT_MODE_TABLE;
+    if (ioctl(fd, UMMU_IOCALLOC_TID, &info) < 0) {
+        return -errno;
+    }
+    *tid_out = info.tid;
+    return 0;
+}
+
+static int free_ummu_tid(int fd, uint32_t tid)
+{
+    struct ummu_tid_info info;
+
+    memset(&info, 0, sizeof(info));
+    info.tid = tid;
+    if (ioctl(fd, UMMU_IOCFREE_TID, &info) < 0) {
+        return -errno;
+    }
+    return 0;
+}
+
 /* ---------- helper: UDP info exchange ---------- */
 
 struct peer_info {
@@ -1669,11 +1728,36 @@ static int exchange_peer_info(int udp_fd, const char *role,
 static void cleanup_resources(struct rdma_resources *res)
 {
     if (res->fd >= 0) {
-        if (res->tjetty_imported) {
-            /* no explicit unimport ioctl in demo; resource freed by fd close */
-        }
         if (res->seg_registered) {
-            /* no explicit unregister ioctl in demo; resource freed by fd close */
+            struct uburma_cmd_unregister_seg cmd;
+            int ret;
+
+            memset(&cmd, 0, sizeof(cmd));
+            cmd.in.handle = res->seg_handle;
+            ret = ub_ioctl(res->fd, UBURMA_CMD_UNREGISTER_SEG,
+                           &cmd, sizeof(cmd));
+            if (ret < 0) {
+                fprintf(stderr, "[ub_rdma] cleanup: unregister_seg failed: %d\n", ret);
+            } else {
+                res->seg_registered = false;
+                res->seg_handle = 0;
+            }
+        }
+        if (res->token_id_handle != 0) {
+            struct uburma_cmd_free_token_id cmd;
+            int ret;
+
+            memset(&cmd, 0, sizeof(cmd));
+            cmd.in.handle = res->token_id_handle;
+            cmd.in.token_id = res->token_id;
+            ret = ub_ioctl(res->fd, UBURMA_CMD_FREE_TOKEN_ID,
+                           &cmd, sizeof(cmd));
+            if (ret < 0) {
+                fprintf(stderr, "[ub_rdma] cleanup: free_token_id failed: %d\n", ret);
+            } else {
+                res->token_id = 0;
+                res->token_id_handle = 0;
+            }
         }
         if (res->jetty_alloc) {
             /* no explicit free jetty ioctl in demo; resource freed by fd close */
@@ -1690,6 +1774,21 @@ static void cleanup_resources(struct rdma_resources *res)
 
         close(res->fd);
         res->fd = -1;
+    }
+
+    if (res->ummu_fd >= 0) {
+        if (res->ummu_tid_allocated) {
+            int ret = free_ummu_tid(res->ummu_fd, res->ummu_tid);
+
+            if (ret < 0) {
+                fprintf(stderr, "[ub_rdma] cleanup: free_ummu_tid failed: %d\n", ret);
+            } else {
+                res->ummu_tid = 0;
+                res->ummu_tid_allocated = false;
+            }
+        }
+        close(res->ummu_fd);
+        res->ummu_fd = -1;
     }
 
     free_ptr(&res->seg_buf);
@@ -1739,6 +1838,7 @@ int main(void)
 
     memset(&g_res, 0, sizeof(g_res));
     g_res.fd = -1;
+    g_res.ummu_fd = -1;
 
     printf("[ub_rdma] start\n");
 
@@ -1797,8 +1897,14 @@ int main(void)
         fprintf(stderr, "[ub_rdma] fail: cannot open uburma device\n");
         return 1;
     }
+    g_res.ummu_fd = open_ummu_tid_device();
+    if (g_res.ummu_fd < 0) {
+        cleanup_resources(&g_res);
+        fprintf(stderr, "[ub_rdma] fail\n");
+        return 1;
+    }
 
-    /* --- step 1: query device attributes (best-effort) --- */
+    /* --- step 1: query device attributes --- */
     {
         struct uburma_cmd_query_device_attr cmd;
         int ret;
@@ -1808,8 +1914,11 @@ int main(void)
 
         ret = ub_ioctl(g_res.fd, UBURMA_CMD_QUERY_DEV_ATTR, &cmd, sizeof(cmd));
         if (ret < 0) {
-            fprintf(stderr, "[ub_rdma] step 1: query_dev_attr unavailable: %d (continue)\n",
+            fprintf(stderr, "[ub_rdma] step 1: query_dev_attr unavailable: %d\n",
                     ret);
+            cleanup_resources(&g_res);
+            fprintf(stderr, "[ub_rdma] fail\n");
+            return 1;
         } else {
             printf("[ub_rdma] step 1: query_dev_attr -> ok\n");
             printf("[ub_rdma]   max_jfc=%u max_jfs=%u max_jfr=%u max_jetty=%u\n",
@@ -1849,7 +1958,12 @@ int main(void)
     }
     {
         struct uburma_cmd_alloc_token_id cmd;
-        uint32_t user_token_id = (1u << UDMA_TID_SHIFT_USER);
+        uint32_t user_token_id;
+
+        STEP_CHECK(2, "alloc_ummu_tid",
+                    alloc_ummu_tid(g_res.ummu_fd, &g_res.ummu_tid));
+        g_res.ummu_tid_allocated = true;
+        user_token_id = g_res.ummu_tid << UDMA_TID_SHIFT_USER;
 
         memset(&cmd, 0, sizeof(cmd));
         zero_udrv_priv(&cmd.udata);
@@ -2395,8 +2509,11 @@ int main(void)
             g_res.tjetty_imported = false;
         } else {
             fprintf(stderr,
-                    "[ub_rdma] step 10: unimport_jetty busy after retries (%d), continue with fd-close cleanup\n",
+                    "[ub_rdma] step 10: unimport_jetty busy after retries (%d)\n",
                     ret);
+            cleanup_resources(&g_res);
+            fprintf(stderr, "[ub_rdma] fail\n");
+            return 1;
         }
     }
 
