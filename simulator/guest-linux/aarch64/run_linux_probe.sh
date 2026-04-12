@@ -18,6 +18,40 @@ QEMU_DEBUG_LOG="${QEMU_DEBUG_LOG:-$OUT_DIR/linux_probe.qemu.log}"
 EXTRA_QEMU_ARGS="${EXTRA_QEMU_ARGS:-}"
 APPEND_EXTRA="${APPEND_EXTRA:-}"
 
+usage() {
+  cat <<'EOF'
+Usage: run_linux_probe.sh --legacy [--help]
+
+This is a legacy linqu-ub probe script and is intentionally guarded.
+Set QEMU_DIR explicitly, for example:
+  QEMU_DIR=/path/to/legacy/qemu ./run_linux_probe.sh --legacy
+EOF
+}
+
+LEGACY_MODE=0
+for arg in "$@"; do
+  case "$arg" in
+    --legacy)
+      LEGACY_MODE=1
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $arg" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ "$LEGACY_MODE" -ne 1 ]]; then
+  echo "Refusing to run legacy linqu-ub probe without --legacy." >&2
+  usage >&2
+  exit 2
+fi
+
 : "${KERNEL_IMAGE:=$DEFAULT_KERNEL_IMAGE}"
 : "${INITRAMFS_IMAGE:=$DEFAULT_INITRAMFS_IMAGE}"
 

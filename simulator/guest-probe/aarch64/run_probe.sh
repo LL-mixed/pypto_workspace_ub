@@ -13,6 +13,40 @@ QEMU_DEBUG_LOG="${QEMU_DEBUG_LOG:-$ROOT_DIR/out/linqu_ub_probe.qemu.log}"
 MACHINE="${MACHINE:-virt}"
 EXTRA_QEMU_ARGS="${EXTRA_QEMU_ARGS:-}"
 
+usage() {
+  cat <<'EOF'
+Usage: run_probe.sh --legacy [--help]
+
+This is a legacy linqu-ub probe script and is intentionally guarded.
+Set QEMU_DIR explicitly, for example:
+  QEMU_DIR=/path/to/legacy/qemu ./run_probe.sh --legacy
+EOF
+}
+
+LEGACY_MODE=0
+for arg in "$@"; do
+  case "$arg" in
+    --legacy)
+      LEGACY_MODE=1
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $arg" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ "$LEGACY_MODE" -ne 1 ]]; then
+  echo "Refusing to run legacy linqu-ub probe without --legacy." >&2
+  usage >&2
+  exit 2
+fi
+
 if [[ -z "$QEMU_DIR" ]]; then
   echo "QEMU_DIR is required for legacy linqu-ub probe script." >&2
   echo "Active dual-node flow uses simulator/vendor/qemu_8.2.0_ub scripts." >&2
