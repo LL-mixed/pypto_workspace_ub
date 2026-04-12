@@ -1,0 +1,10 @@
+scenario=dual-node-demo
+iterations=1
+run_secs=120
+start_gap_secs=1
+min_pass_rate_percent=100
+max_runtime=300
+passed=0
+failed=1
+pass_rate_percent=0
+iteration_1_result=13
