@@ -10,9 +10,16 @@ OUT_DIR="$ROOT_DIR/out/driver"
 : "${ARCH:=arm64}"
 
 if [[ -z "$KERNEL_BUILD_DIR" ]]; then
-  echo "KERNEL_BUILD_DIR is required" >&2
-  echo "example: export KERNEL_BUILD_DIR=/path/to/linux-build" >&2
-  exit 1
+  if [[ -d "$ROOT_DIR/out/kernel_build" ]]; then
+    KERNEL_BUILD_DIR="$ROOT_DIR/out/kernel_build"
+  elif [[ -d "$ROOT_DIR/kernel_build" ]]; then
+    # Legacy location (before moving build trees under out/)
+    KERNEL_BUILD_DIR="$ROOT_DIR/kernel_build"
+  else
+    echo "KERNEL_BUILD_DIR is required" >&2
+    echo "example: export KERNEL_BUILD_DIR=$ROOT_DIR/out/kernel_build" >&2
+    exit 1
+  fi
 fi
 
 mkdir -p "$OUT_DIR"

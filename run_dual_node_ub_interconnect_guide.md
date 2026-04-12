@@ -108,9 +108,9 @@ BUILD_IN_VM=1 BUILD_LINQU_DRIVER_IN_VM=1 ./sync_ub_kernel_artifacts_from_vm.sh
 
 ### 4.3 编译配置位置
 
-- 本地内核 build 树：`simulator/guest-linux/aarch64/kernel_build`
-- 配置文件：`simulator/guest-linux/aarch64/kernel_build/.config`
-- 源码链接：`simulator/guest-linux/aarch64/kernel_build/source -> /Volumes/repos/pypto_workspace/simulator/guest-linux/kernel_ub`
+- 本地内核 build 树：`simulator/guest-linux/aarch64/out/kernel_build`
+- 配置文件：`simulator/guest-linux/aarch64/out/kernel_build/.config`
+- 源码链接：`simulator/guest-linux/aarch64/out/kernel_build/source -> /Volumes/repos/pypto_workspace/simulator/guest-linux/kernel_ub`
 
 ## 5. initramfs 构建
 
