@@ -163,6 +163,57 @@ validate_rdma_log() {
   local log_file="$2"
   assert_log_has "$log_file" "\\[ub_rdma\\] pass" "${node_name} rdma pass" || return 1
   assert_log_absent "$log_file" "\\[ub_rdma\\] fail" "${node_name} rdma fail" || return 1
+  assert_log_has "$log_file" "\\[ub_rdma\\] step 2: alloc_ummu_tid -> ok" \
+    "${node_name} rdma alloc ummu tid" || return 1
+  assert_log_has "$log_file" "\\[ub_rdma\\] step 2: alloc_token_id -> ok" \
+    "${node_name} rdma alloc token id" || return 1
+  assert_log_has "$log_file" "\\[ub_rdma\\] step 7: register_seg -> ok" \
+    "${node_name} rdma register seg" || return 1
+  assert_log_has "$log_file" "\\[ub_rdma\\] step 8: import_jetty -> ok" \
+    "${node_name} rdma import jetty" || return 1
+  assert_log_has "$log_file" "\\[ub_rdma\\] step 9: bind_jetty -> ok" \
+    "${node_name} rdma bind jetty" || return 1
+  assert_log_has "$log_file" "\\[ub_rdma\\] step 9\\.5: post_recv -> ok" \
+    "${node_name} rdma post recv" || return 1
+  assert_log_has "$log_file" "\\[ub_rdma\\] step 9\\.5: ready_sync -> ok" \
+    "${node_name} rdma ready sync" || return 1
+  if [[ "$node_name" == "nodeA" ]]; then
+    assert_log_has "$log_file" "\\[ub_rdma\\] step 9\\.5: send_request -> ok len=[0-9]+" \
+      "${node_name} rdma send request" || return 1
+    assert_log_has "$log_file" "\\[ub_rdma\\] step 9\\.5: recv_reply -> ok payload=\"rdma reply payload from NodeB\"" \
+      "${node_name} rdma reply payload" || return 1
+  else
+    assert_log_has "$log_file" "\\[ub_rdma\\] step 9\\.5: recv_request -> ok payload=\"rdma request payload from NodeA\"" \
+      "${node_name} rdma request payload" || return 1
+    assert_log_has "$log_file" "\\[ub_rdma\\] step 9\\.5: send_reply -> ok len=[0-9]+" \
+      "${node_name} rdma send reply" || return 1
+  fi
+  assert_log_has "$log_file" "\\[ub_rdma\\] step 10: unbind_jetty -> ok" \
+    "${node_name} rdma unbind jetty" || return 1
+  assert_log_has "$log_file" "\\[ub_rdma\\] step 10: unimport_jetty -> ok" \
+    "${node_name} rdma unimport jetty" || return 1
+  assert_log_has "$log_file" "\\[ub_rdma\\] cleanup: unregister_seg -> ok" \
+    "${node_name} rdma unregister seg cleanup" || return 1
+  assert_log_has "$log_file" "\\[ub_rdma\\] cleanup: free_token_id -> ok" \
+    "${node_name} rdma free token id cleanup" || return 1
+  assert_log_has "$log_file" "\\[ub_rdma\\] cleanup: free_ummu_tid -> ok" \
+    "${node_name} rdma free ummu tid cleanup" || return 1
+  assert_log_absent "$log_file" "UDMA: invalid port speed = 0" \
+    "${node_name} rdma invalid port speed" || return 1
+  assert_log_absent "$log_file" "failed to query device status" \
+    "${node_name} rdma query device status failure" || return 1
+  assert_log_absent "$log_file" "ubcore topo map doesn't exist" \
+    "${node_name} rdma topo map missing" || return 1
+  assert_log_absent "$log_file" "UDMA: wait resp timeout" \
+    "${node_name} rdma wait response timeout" || return 1
+  assert_log_absent "$log_file" "fail to notify mue save tp" \
+    "${node_name} rdma save tp failure" || return 1
+  assert_log_absent "$log_file" "ubcore_unimport_jetty_async failed" \
+    "${node_name} rdma unimport jetty async failure" || return 1
+  assert_log_absent "$log_file" "failed to remove uobject" \
+    "${node_name} rdma uobject cleanup failure" || return 1
+  assert_log_absent "$log_file" "invalidate cfg_table failed" \
+    "${node_name} rdma cfg table cleanup failure" || return 1
 }
 
 validate_kernel_health_log() {
@@ -392,17 +443,17 @@ check_link_early_or_fail() {
   local nodeb_log="$2"
   local timeout_s="$3"
   local deadline=$((SECONDS + timeout_s))
-  local fail_pat="ub_link: server listen failed|ub_link: failed to connect remote server|bizmsg roundtrip fail: remote linkup not ready|\\[init\\] ub sysfs wait timed out"
+  local fail_pat="ub_link: server listen failed|ub_link: failed to connect remote server|bizmsg roundtrip fail: remote linkup not ready|\\[init\\] ub sysfs wait timed out|Failed to bind socket|Failed to bind|failed to create listener|Address already in use|Operation not permitted"
   local ok_pat="ub_link: connected to remote server|ub_link: accepted connection|remote snapshot load done|remote cfg notify done"
 
   while (( SECONDS < deadline )); do
     if [[ -f "$nodea_log" ]] && rg -q "$fail_pat" "$nodea_log"; then
-      echo "early link failure detected on nodeA" >&2
+      echo "early qemu/link failure detected on nodeA" >&2
       dump_link_diagnostics "$nodea_log" "$nodeb_log"
       return 1
     fi
     if [[ -f "$nodeb_log" ]] && rg -q "$fail_pat" "$nodeb_log"; then
-      echo "early link failure detected on nodeB" >&2
+      echo "early qemu/link failure detected on nodeB" >&2
       dump_link_diagnostics "$nodea_log" "$nodeb_log"
       return 1
     fi

@@ -54,6 +54,21 @@
 #define WAIT_IFACE_MS   90000
 #define SYNC_TIMEOUT_MS 30000
 #define DEMO_PAGE_SIZE  4096
+#define RDMA_Q_DEPTH    64
+#define RDMA_CQ_SHIFT   6
+#define RDMA_MAX_PAYLOAD 256
+#define UDMA_JFC_DB_VALID_OWNER_M 1
+#define UDMA_JFC_DB_CI_IDX_M 0x003fffffU
+#define UDMA_JFR_DB_PI_M 0x0000ffffU
+#define UDMA_SRC_IDX_SHIFT 16
+#define UDMA_MMAP_JETTY_DSQE_LOCAL 2
+#define UDMA_DOORBELL_OFFSET_LOCAL 0x80
+#define MAP_INDEX_SHIFT_LOCAL 4
+
+enum {
+    CQE_FOR_SEND_LOCAL = 0,
+    CQE_FOR_RECEIVE_LOCAL = 1,
+};
 
 /* ---------- resource tracking ---------- */
 
@@ -81,6 +96,13 @@ struct rdma_resources {
     bool jetty_alloc;
     bool seg_registered;
     bool tjetty_imported;
+    uint32_t local_hw_jetty_id;
+    uint32_t bound_tpn;
+    uint8_t peer_eid[UBCORE_EID_SIZE];
+    uint32_t peer_jetty_id;
+    uint32_t sq_pi;
+    uint32_t rq_pi;
+    uint32_t cq_ci;
     void *seg_buf;
     size_t seg_len;
     void *jfc_ucmd_buf;
@@ -90,15 +112,95 @@ struct rdma_resources {
     size_t jfc_db_len;
     bool jfc_db_is_mmap;
     void *jfr_buf;
+    size_t jfr_buf_len;
+    bool jfr_buf_is_mmap;
     void *jfr_idx_buf;
+    size_t jfr_idx_buf_len;
+    bool jfr_idx_buf_is_mmap;
     void *jfr_db_buf;
+    size_t jfr_db_buf_len;
+    bool jfr_db_buf_is_mmap;
     void *jfs_buf;
     void *jfs_db_buf;
     void *jetty_buf;
+    size_t jetty_buf_len;
+    bool jetty_buf_is_mmap;
     void *jetty_db_buf;
+    void *jetty_dsqe_page;
+    size_t jetty_dsqe_len;
+    bool jetty_dsqe_is_mmap;
 };
 
 static struct rdma_resources g_res;
+
+enum udma_sq_opcode_local {
+    UDMA_OPC_SEND_LOCAL = 0x0,
+};
+
+struct udma_sqe_ctl_local {
+    uint32_t sqe_bb_idx : 16;
+    uint32_t place_odr : 2;
+    uint32_t comp_order : 1;
+    uint32_t fence : 1;
+    uint32_t se : 1;
+    uint32_t cqe : 1;
+    uint32_t inline_en : 1;
+    uint32_t rsv : 5;
+    uint32_t token_en : 1;
+    uint32_t rmt_jetty_type : 2;
+    uint32_t owner : 1;
+    uint32_t target_hint : 8;
+    uint32_t opcode : 8;
+    uint32_t rsv1 : 6;
+    uint32_t inline_msg_len : 10;
+    uint32_t tpn : 24;
+    uint32_t sge_num : 8;
+    uint32_t rmt_obj_id : 20;
+    uint32_t rsv2 : 12;
+    uint8_t rmt_eid[UBCORE_EID_SIZE];
+    uint32_t rmt_token_value;
+    uint32_t rsv3;
+    uint32_t rmt_addr_l_or_token_id;
+    uint32_t rmt_addr_h_or_token_value;
+};
+
+struct udma_normal_sge_local {
+    uint32_t length;
+    uint32_t token_id;
+    uint64_t va;
+};
+
+struct udma_wqe_sge_local {
+    uint32_t length;
+    uint32_t token_id;
+    uint64_t va;
+};
+
+struct udma_jfc_cqe_local {
+    uint32_t s_r : 1;
+    uint32_t is_jetty : 1;
+    uint32_t owner : 1;
+    uint32_t inline_en : 1;
+    uint32_t opcode : 3;
+    uint32_t fd : 1;
+    uint32_t rsv : 8;
+    uint32_t substatus : 8;
+    uint32_t status : 8;
+    uint32_t entry_idx : 16;
+    uint32_t local_num_l : 16;
+    uint32_t local_num_h : 4;
+    uint32_t rmt_idx : 20;
+    uint32_t rsv1 : 8;
+    uint32_t tpn : 24;
+    uint32_t rsv2 : 8;
+    uint32_t byte_cnt;
+    uint32_t user_data_l;
+    uint32_t user_data_h;
+    uint32_t rmt_eid[4];
+    uint32_t data_l;
+    uint32_t data_h;
+    uint32_t inline_data[3];
+};
 
 struct uburma_cmd_unbind_jetty_local {
     struct {
@@ -141,6 +243,187 @@ static long now_ms(void)
         return 0;
     }
     return (long)(ts.tv_sec * 1000L + ts.tv_nsec / 1000000L);
+}
+
+static void local_wmb(void)
+{
+    __sync_synchronize();
+}
+
+static void reverse_bytes(const uint8_t *src, uint8_t *dst, size_t len)
+{
+    size_t i;
+
+    for (i = 0; i < len; i++) {
+        dst[i] = src[len - i - 1];
+    }
+}
+
+static uint32_t rdma_cq_valid_owner(uint32_t ci)
+{
+    return (ci >> RDMA_CQ_SHIFT) & UDMA_JFC_DB_VALID_OWNER_M;
+}
+
+static struct udma_jfc_cqe_local *rdma_get_cqe(struct rdma_resources *res, uint32_t ci)
+{
+    struct udma_jfc_cqe_local *ring = res->jfc_ucmd_buf;
+    struct udma_jfc_cqe_local *cqe = &ring[ci & (RDMA_Q_DEPTH - 1)];
+
+    if (!(cqe->owner ^ rdma_cq_valid_owner(ci))) {
+        return NULL;
+    }
+    return cqe;
+}
+
+static void rdma_consume_cqe(struct rdma_resources *res)
+{
+    uint32_t *db = res->jfc_db_buf;
+
+    res->cq_ci++;
+    local_wmb();
+    *db = res->cq_ci & UDMA_JFC_DB_CI_IDX_M;
+}
+
+static int rdma_poll_one_cqe(struct rdma_resources *res, long timeout_ms,
+                             struct udma_jfc_cqe_local *out)
+{
+    long deadline = now_ms() + timeout_ms;
+
+    while (now_ms() < deadline) {
+        struct udma_jfc_cqe_local *cqe = rdma_get_cqe(res, res->cq_ci);
+
+        if (cqe != NULL) {
+            memcpy(out, cqe, sizeof(*out));
+            rdma_consume_cqe(res);
+            return 0;
+        }
+        usleep(1000);
+    }
+    return -ETIMEDOUT;
+}
+
+static int rdma_wait_for_cqe(struct rdma_resources *res, long timeout_ms,
+                             uint32_t expect_s_r,
+                             struct udma_jfc_cqe_local *out)
+{
+    long deadline = now_ms() + timeout_ms;
+
+    while (now_ms() < deadline) {
+        int ret = rdma_poll_one_cqe(res, 50, out);
+
+        if (ret == -ETIMEDOUT) {
+            continue;
+        }
+        if (ret < 0) {
+            return ret;
+        }
+        if (out->status != 0) {
+            fprintf(stderr,
+                    "[ub_rdma] cqe error: s_r=%u opcode=%u status=%u substatus=%u local=%u remote=%u\n",
+                    out->s_r, out->opcode, out->status, out->substatus,
+                    (out->local_num_h << UDMA_SRC_IDX_SHIFT) | out->local_num_l,
+                    out->rmt_idx);
+            return -EIO;
+        }
+        if (out->s_r == expect_s_r) {
+            return 0;
+        }
+    }
+    return -ETIMEDOUT;
+}
+
+static int rdma_post_recv_one(struct rdma_resources *res, void *buf, uint32_t len)
+{
+    struct udma_wqe_sge_local *rq = res->jfr_buf;
+    uint32_t *idx_ring = res->jfr_idx_buf;
+    uint32_t *db = res->jfr_db_buf;
+    uint32_t slot = res->rq_pi & (RDMA_Q_DEPTH - 1);
+
+    rq[slot].length = len;
+    rq[slot].token_id = 0;
+    rq[slot].va = (uint64_t)(uintptr_t)buf;
+    idx_ring[slot] = slot;
+    res->rq_pi++;
+    local_wmb();
+    *db = res->rq_pi & UDMA_JFR_DB_PI_M;
+    return 0;
+}
+
+static int rdma_post_send_one(struct rdma_resources *res, const void *buf, uint32_t len)
+{
+    struct udma_sqe_ctl_local *sqe;
+    struct udma_normal_sge_local *sge;
+    uint32_t *db = res->jetty_db_buf;
+    uint32_t slot = res->sq_pi & (RDMA_Q_DEPTH - 1);
+
+    if (len == 0 || len > RDMA_MAX_PAYLOAD) {
+        return -EINVAL;
+    }
+
+    sqe = (struct udma_sqe_ctl_local *)((uint8_t *)res->jetty_buf + slot * 64);
+    memset(sqe, 0, 64);
+    sge = (struct udma_normal_sge_local *)(sqe + 1);
+
+    sqe->sqe_bb_idx = res->sq_pi;
+    sqe->cqe = 1;
+    sqe->owner = ((res->sq_pi & RDMA_Q_DEPTH) == 0) ? 1 : 0;
+    sqe->opcode = UDMA_OPC_SEND_LOCAL;
+    sqe->tpn = res->bound_tpn;
+    sqe->sge_num = 1;
+    sqe->rmt_obj_id = res->peer_jetty_id;
+    sqe->rmt_jetty_type = UBCORE_JETTY_USER;
+    memcpy(sqe->rmt_eid, res->peer_eid, sizeof(res->peer_eid));
+
+    sge->length = len;
+    sge->token_id = 0;
+    sge->va = (uint64_t)(uintptr_t)buf;
+
+    res->sq_pi++;
+    local_wmb();
+    *db = res->sq_pi;
+    return 0;
+}
+
+static int sync_datapath_ready(int udp_fd, const char *role,
+                               const struct sockaddr_in *peer)
+{
+    static const char ready_msg[] = "RDMA_DEMO_READY";
+    static const char ack_msg[] = "RDMA_DEMO_READY_ACK";
+    char buf[64];
+    struct sockaddr_in from;
+    socklen_t from_len = sizeof(from);
+    ssize_t n;
+
+    if (strcmp(role, "nodeA") == 0) {
+        if (sendto(udp_fd, ready_msg, sizeof(ready_msg), 0,
+                   (const struct sockaddr *)peer, sizeof(*peer)) < 0) {
+            return -errno;
+        }
+        n = recvfrom(udp_fd, buf, sizeof(buf), 0,
+                     (struct sockaddr *)&from, &from_len);
+        if (n < 0) {
+            return -errno;
+        }
+        if ((size_t)n != sizeof(ack_msg) ||
+            memcmp(buf, ack_msg, sizeof(ack_msg)) != 0) {
+            return -EPROTO;
+        }
+    } else {
+        n = recvfrom(udp_fd, buf, sizeof(buf), 0,
+                     (struct sockaddr *)&from, &from_len);
+        if (n < 0) {
+            return -errno;
+        }
+        if ((size_t)n != sizeof(ready_msg) ||
+            memcmp(buf, ready_msg, sizeof(ready_msg)) != 0) {
+            return -EPROTO;
+        }
+        if (sendto(udp_fd, ack_msg, sizeof(ack_msg), 0,
+                   (const struct sockaddr *)peer, sizeof(*peer)) < 0) {
+            return -errno;
+        }
+    }
+    return 0;
 }
 
 /* ---------- helper: file read ---------- */
@@ -493,6 +776,19 @@ static void *map_udma_kernel_buf(int fd, size_t len)
     return addr;
 }
 
+static void *map_udma_jetty_dsqe_page(int fd, uint32_t jetty_id)
+{
+    off_t offset = (off_t)(((uint64_t)jetty_id << MAP_INDEX_SHIFT_LOCAL) |
+                           UDMA_MMAP_JETTY_DSQE_LOCAL) * DEMO_PAGE_SIZE;
+    void *addr = mmap(NULL, DEMO_PAGE_SIZE, PROT_READ | PROT_WRITE,
+                      MAP_SHARED, fd, offset);
+
+    if (addr == MAP_FAILED) {
+        return NULL;
+    }
+    return addr;
+}
+
 static int ensure_runtime_buffers(struct rdma_resources *res)
 {
     if (res->seg_buf == NULL) {
@@ -519,22 +815,28 @@ static int ensure_runtime_buffers(struct rdma_resources *res)
         res->jfc_db_is_mmap = true;
     }
     if (res->jfr_buf == NULL) {
-        res->jfr_buf = alloc_aligned_zero(DEMO_PAGE_SIZE);
+        res->jfr_buf = map_udma_kernel_buf(res->fd, DEMO_PAGE_SIZE);
         if (res->jfr_buf == NULL) {
             return -ENOMEM;
         }
+        res->jfr_buf_len = DEMO_PAGE_SIZE;
+        res->jfr_buf_is_mmap = true;
     }
     if (res->jfr_idx_buf == NULL) {
-        res->jfr_idx_buf = alloc_aligned_zero(DEMO_PAGE_SIZE);
+        res->jfr_idx_buf = map_udma_kernel_buf(res->fd, DEMO_PAGE_SIZE);
         if (res->jfr_idx_buf == NULL) {
             return -ENOMEM;
         }
+        res->jfr_idx_buf_len = DEMO_PAGE_SIZE;
+        res->jfr_idx_buf_is_mmap = true;
     }
     if (res->jfr_db_buf == NULL) {
-        res->jfr_db_buf = alloc_aligned_zero(DEMO_PAGE_SIZE);
+        res->jfr_db_buf = map_udma_kernel_buf(res->fd, DEMO_PAGE_SIZE);
         if (res->jfr_db_buf == NULL) {
             return -ENOMEM;
         }
+        res->jfr_db_buf_len = DEMO_PAGE_SIZE;
+        res->jfr_db_buf_is_mmap = true;
     }
     if (res->jfs_buf == NULL) {
         res->jfs_buf = alloc_aligned_zero(DEMO_PAGE_SIZE);
@@ -549,10 +851,12 @@ static int ensure_runtime_buffers(struct rdma_resources *res)
         }
     }
     if (res->jetty_buf == NULL) {
-        res->jetty_buf = alloc_aligned_zero(DEMO_PAGE_SIZE);
+        res->jetty_buf = map_udma_kernel_buf(res->fd, DEMO_PAGE_SIZE);
         if (res->jetty_buf == NULL) {
             return -ENOMEM;
         }
+        res->jetty_buf_len = DEMO_PAGE_SIZE;
+        res->jetty_buf_is_mmap = true;
     }
     if (res->jetty_db_buf == NULL) {
         res->jetty_db_buf = alloc_aligned_zero(DEMO_PAGE_SIZE);
@@ -1739,6 +2043,7 @@ static void cleanup_resources(struct rdma_resources *res)
             if (ret < 0) {
                 fprintf(stderr, "[ub_rdma] cleanup: unregister_seg failed: %d\n", ret);
             } else {
+                printf("[ub_rdma] cleanup: unregister_seg -> ok\n");
                 res->seg_registered = false;
                 res->seg_handle = 0;
             }
@@ -1755,6 +2060,7 @@ static void cleanup_resources(struct rdma_resources *res)
             if (ret < 0) {
                 fprintf(stderr, "[ub_rdma] cleanup: free_token_id failed: %d\n", ret);
             } else {
+                printf("[ub_rdma] cleanup: free_token_id -> ok\n");
                 res->token_id = 0;
                 res->token_id_handle = 0;
             }
@@ -1783,6 +2089,7 @@ static void cleanup_resources(struct rdma_resources *res)
             if (ret < 0) {
                 fprintf(stderr, "[ub_rdma] cleanup: free_ummu_tid failed: %d\n", ret);
             } else {
+                printf("[ub_rdma] cleanup: free_ummu_tid -> ok\n");
                 res->ummu_tid = 0;
                 res->ummu_tid_allocated = false;
             }
@@ -1804,17 +2111,55 @@ static void cleanup_resources(struct rdma_resources *res)
     } else {
         free_ptr(&res->jfc_db_buf);
     }
-    free_ptr(&res->jfr_buf);
-    free_ptr(&res->jfr_idx_buf);
-    free_ptr(&res->jfr_db_buf);
+    if (res->jfr_buf_is_mmap && res->jfr_buf != NULL) {
+        munmap(res->jfr_buf, res->jfr_buf_len);
+        res->jfr_buf = NULL;
+    } else {
+        free_ptr(&res->jfr_buf);
+    }
+    if (res->jfr_idx_buf_is_mmap && res->jfr_idx_buf != NULL) {
+        munmap(res->jfr_idx_buf, res->jfr_idx_buf_len);
+        res->jfr_idx_buf = NULL;
+    } else {
+        free_ptr(&res->jfr_idx_buf);
+    }
+    if (res->jfr_db_buf_is_mmap && res->jfr_db_buf != NULL) {
+        munmap(res->jfr_db_buf, res->jfr_db_buf_len);
+        res->jfr_db_buf = NULL;
+    } else {
+        free_ptr(&res->jfr_db_buf);
+    }
     free_ptr(&res->jfs_buf);
     free_ptr(&res->jfs_db_buf);
-    free_ptr(&res->jetty_buf);
-    free_ptr(&res->jetty_db_buf);
+    if (res->jetty_buf_is_mmap && res->jetty_buf != NULL) {
+        munmap(res->jetty_buf, res->jetty_buf_len);
+        res->jetty_buf = NULL;
+    } else {
+        free_ptr(&res->jetty_buf);
+    }
+    if (!res->jetty_dsqe_is_mmap) {
+        free_ptr(&res->jetty_db_buf);
+    } else {
+        res->jetty_db_buf = NULL;
+    }
+    if (res->jetty_dsqe_is_mmap && res->jetty_dsqe_page != NULL) {
+        munmap(res->jetty_dsqe_page, res->jetty_dsqe_len);
+        res->jetty_dsqe_page = NULL;
+    }
     res->jfc_ucmd_len = 0;
     res->jfc_db_len = 0;
+    res->jfr_buf_len = 0;
+    res->jfr_idx_buf_len = 0;
+    res->jfr_db_buf_len = 0;
+    res->jetty_buf_len = 0;
+    res->jetty_dsqe_len = 0;
     res->jfc_ucmd_is_mmap = false;
     res->jfc_db_is_mmap = false;
+    res->jfr_buf_is_mmap = false;
+    res->jfr_idx_buf_is_mmap = false;
+    res->jfr_db_buf_is_mmap = false;
+    res->jetty_buf_is_mmap = false;
+    res->jetty_dsqe_is_mmap = false;
     res->seg_len = 0;
 }
 
@@ -2093,7 +2438,7 @@ int main(void)
         ucmd.idx_addr = (uint64_t)(uintptr_t)g_res.jfr_idx_buf;
         ucmd.idx_len = DEMO_PAGE_SIZE;
         ucmd.jetty_addr = (uint64_t)(uintptr_t)g_res.jfr_buf;
-        ucmd.non_pin = 1;
+        ucmd.non_pin = 0;
         ucmd.is_hugepage = 0;
         ucmd.jfr_sleep_buf = 0;
 
@@ -2188,7 +2533,7 @@ int main(void)
             ucmd.idx_len = 0;
             ucmd.sqe_bb_cnt = 1;
             ucmd.jetty_addr = (uint64_t)(uintptr_t)g_res.jfs_buf;
-            ucmd.non_pin = 1;
+            ucmd.non_pin = 0;
             ucmd.is_hugepage = 0;
             ucmd.jfr_sleep_buf = 0;
             ucmd.jfs_id = 0;
@@ -2284,7 +2629,7 @@ int main(void)
         ucmd.idx_len = 0;
         ucmd.sqe_bb_cnt = 1;
         ucmd.jetty_addr = (uint64_t)(uintptr_t)g_res.jetty_buf;
-        ucmd.non_pin = 1;
+        ucmd.non_pin = 0;
         ucmd.is_hugepage = 0;
         ucmd.jfr_sleep_buf = 0;
         ucmd.jfs_id = 0;
@@ -2298,6 +2643,21 @@ int main(void)
         STEP_CHECK(6, "active_jetty",
                     ub_ioctl(g_res.fd, UBURMA_CMD_ACTIVE_JETTY,
                              &cmd, sizeof(cmd)));
+        free_ptr(&g_res.jetty_db_buf);
+        g_res.local_hw_jetty_id = cmd.out.jetty_id;
+        g_res.jetty_dsqe_page = map_udma_jetty_dsqe_page(g_res.fd, g_res.local_hw_jetty_id);
+        if (g_res.jetty_dsqe_page == NULL) {
+            fprintf(stderr, "[ub_rdma] step 6: map jetty dsqe page failed: %s\n",
+                    strerror(errno));
+            cleanup_resources(&g_res);
+            fprintf(stderr, "[ub_rdma] fail\n");
+            return 1;
+        }
+        g_res.jetty_dsqe_len = DEMO_PAGE_SIZE;
+        g_res.jetty_dsqe_is_mmap = true;
+        g_res.jetty_db_buf = (uint8_t *)g_res.jetty_dsqe_page + UDMA_DOORBELL_OFFSET_LOCAL;
+        printf("[ub_rdma] step 6: local_hw_jetty_id=%u db=%p\n",
+               g_res.local_hw_jetty_id, g_res.jetty_db_buf);
     }
 
     /* --- step 7: register memory segment --- */
@@ -2378,7 +2738,11 @@ int main(void)
         if (!read_eid_from_sysfs(local_info.eid)) {
             memset(local_info.eid, 0, sizeof(local_info.eid));
         }
-        local_info.jetty_id = g_res.jetty_id;
+        /*
+         * The device model routes incoming URMA payloads by the active hardware
+         * jetty id returned from ACTIVE_JETTY, not the alloc-time logical id.
+         */
+        local_info.jetty_id = g_res.local_hw_jetty_id;
         local_info.token = g_res.token_id;
 
         /* rebind to data port for info exchange */
@@ -2428,8 +2792,9 @@ int main(void)
         printf("[ub_rdma] step 8: exchange info -> ok\n");
         printf("[ub_rdma]   peer jetty_id=%u token=%u\n",
                remote_info.jetty_id, remote_info.token);
-
-        close(udp_fd);
+        memcpy(g_res.peer_eid, remote_info.eid, sizeof(g_res.peer_eid));
+        reverse_bytes(remote_info.eid, g_res.peer_eid, sizeof(g_res.peer_eid));
+        g_res.peer_jetty_id = remote_info.jetty_id;
 
         /* import peer jetty */
         {
@@ -2455,21 +2820,133 @@ int main(void)
                    " tpn=%u\n",
                    g_res.tjetty_handle, cmd.out.tpn);
         }
-    }
 
-    /* --- step 9: bind jetty --- */
-    {
-        struct uburma_cmd_bind_jetty cmd;
+        /* --- step 9: bind jetty --- */
+        {
+            struct uburma_cmd_bind_jetty cmd;
 
-        memset(&cmd, 0, sizeof(cmd));
-        cmd.in.jetty_handle = g_res.jetty_handle;
-        cmd.in.tjetty_handle = g_res.tjetty_handle;
-        zero_udrv_priv(&cmd.udata);
+            memset(&cmd, 0, sizeof(cmd));
+            cmd.in.jetty_handle = g_res.jetty_handle;
+            cmd.in.tjetty_handle = g_res.tjetty_handle;
+            zero_udrv_priv(&cmd.udata);
 
-        STEP_CHECK(9, "bind_jetty",
-                    ub_ioctl(g_res.fd, UBURMA_CMD_BIND_JETTY,
-                             &cmd, sizeof(cmd)));
-        printf("[ub_rdma]   bound tpn=%u\n", cmd.out.tpn);
+            STEP_CHECK(9, "bind_jetty",
+                        ub_ioctl(g_res.fd, UBURMA_CMD_BIND_JETTY,
+                                 &cmd, sizeof(cmd)));
+            g_res.bound_tpn = cmd.out.tpn;
+            printf("[ub_rdma]   bound tpn=%u\n", cmd.out.tpn);
+        }
+
+        /* --- step 9.5: actual payload round-trip over bound jetty --- */
+        {
+            struct udma_jfc_cqe_local cqe;
+            uint8_t *tx_buf = g_res.seg_buf;
+            uint8_t *rx_buf = (uint8_t *)g_res.seg_buf + 2048;
+            const char req_msg[] = "rdma request payload from NodeA";
+            const char reply_msg[] = "rdma reply payload from NodeB";
+            int ret;
+
+            memset(rx_buf, 0, RDMA_MAX_PAYLOAD);
+            ret = rdma_post_recv_one(&g_res, rx_buf, RDMA_MAX_PAYLOAD);
+            if (ret < 0) {
+                fprintf(stderr, "[ub_rdma] step 9.5: post_recv failed: %d\n", ret);
+                close(udp_fd);
+                cleanup_resources(&g_res);
+                fprintf(stderr, "[ub_rdma] fail\n");
+                return 1;
+            }
+            printf("[ub_rdma] step 9.5: post_recv -> ok\n");
+
+            ret = sync_datapath_ready(udp_fd, role, &data_addr);
+            if (ret < 0) {
+                fprintf(stderr, "[ub_rdma] step 9.5: ready sync failed: %d\n", ret);
+                close(udp_fd);
+                cleanup_resources(&g_res);
+                fprintf(stderr, "[ub_rdma] fail\n");
+                return 1;
+            }
+            printf("[ub_rdma] step 9.5: ready_sync -> ok\n");
+
+            if (strcmp(role, "nodeA") == 0) {
+                memcpy(tx_buf, req_msg, sizeof(req_msg));
+                ret = rdma_post_send_one(&g_res, tx_buf, sizeof(req_msg));
+                if (ret < 0) {
+                    fprintf(stderr, "[ub_rdma] step 9.5: send request failed: %d\n", ret);
+                    close(udp_fd);
+                    cleanup_resources(&g_res);
+                    fprintf(stderr, "[ub_rdma] fail\n");
+                    return 1;
+                }
+                ret = rdma_wait_for_cqe(&g_res, 5000, CQE_FOR_SEND_LOCAL, &cqe);
+                if (ret < 0) {
+                    fprintf(stderr, "[ub_rdma] step 9.5: wait request send cqe failed: %d\n", ret);
+                    close(udp_fd);
+                    cleanup_resources(&g_res);
+                    fprintf(stderr, "[ub_rdma] fail\n");
+                    return 1;
+                }
+                printf("[ub_rdma] step 9.5: send_request -> ok len=%u\n", cqe.byte_cnt);
+
+                ret = rdma_wait_for_cqe(&g_res, 5000, CQE_FOR_RECEIVE_LOCAL, &cqe);
+                if (ret < 0) {
+                    fprintf(stderr, "[ub_rdma] step 9.5: wait reply recv cqe failed: %d\n", ret);
+                    close(udp_fd);
+                    cleanup_resources(&g_res);
+                    fprintf(stderr, "[ub_rdma] fail\n");
+                    return 1;
+                }
+                if (strcmp((char *)rx_buf, reply_msg) != 0) {
+                    fprintf(stderr,
+                            "[ub_rdma] step 9.5: reply payload mismatch got=\"%s\" expected=\"%s\"\n",
+                            (char *)rx_buf, reply_msg);
+                    close(udp_fd);
+                    cleanup_resources(&g_res);
+                    fprintf(stderr, "[ub_rdma] fail\n");
+                    return 1;
+                }
+                printf("[ub_rdma] step 9.5: recv_reply -> ok payload=\"%s\"\n", rx_buf);
+            } else {
+                ret = rdma_wait_for_cqe(&g_res, 5000, CQE_FOR_RECEIVE_LOCAL, &cqe);
+                if (ret < 0) {
+                    fprintf(stderr, "[ub_rdma] step 9.5: wait request recv cqe failed: %d\n", ret);
+                    close(udp_fd);
+                    cleanup_resources(&g_res);
+                    fprintf(stderr, "[ub_rdma] fail\n");
+                    return 1;
+                }
+                if (strcmp((char *)rx_buf, req_msg) != 0) {
+                    fprintf(stderr,
+                            "[ub_rdma] step 9.5: request payload mismatch got=\"%s\" expected=\"%s\"\n",
+                            (char *)rx_buf, req_msg);
+                    close(udp_fd);
+                    cleanup_resources(&g_res);
+                    fprintf(stderr, "[ub_rdma] fail\n");
+                    return 1;
+                }
+                printf("[ub_rdma] step 9.5: recv_request -> ok payload=\"%s\"\n", rx_buf);
+
+                memcpy(tx_buf, reply_msg, sizeof(reply_msg));
+                ret = rdma_post_send_one(&g_res, tx_buf, sizeof(reply_msg));
+                if (ret < 0) {
+                    fprintf(stderr, "[ub_rdma] step 9.5: send reply failed: %d\n", ret);
+                    close(udp_fd);
+                    cleanup_resources(&g_res);
+                    fprintf(stderr, "[ub_rdma] fail\n");
+                    return 1;
+                }
+                ret = rdma_wait_for_cqe(&g_res, 5000, CQE_FOR_SEND_LOCAL, &cqe);
+                if (ret < 0) {
+                    fprintf(stderr, "[ub_rdma] step 9.5: wait reply send cqe failed: %d\n", ret);
+                    close(udp_fd);
+                    cleanup_resources(&g_res);
+                    fprintf(stderr, "[ub_rdma] fail\n");
+                    return 1;
+                }
+                printf("[ub_rdma] step 9.5: send_reply -> ok len=%u\n", cqe.byte_cnt);
+            }
+        }
+
+        close(udp_fd);
     }
 
     /* --- step 10: explicit unbind + unimport to avoid fd-close stall --- */
