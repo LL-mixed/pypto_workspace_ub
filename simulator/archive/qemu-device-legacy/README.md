@@ -12,6 +12,6 @@ Reason for archive:
 
 Compatibility note:
 - Legacy probe scripts are explicitly guarded and require `--legacy`:
-  - `simulator/guest-linux/aarch64/run_linux_probe.sh`
+  - `simulator/guest-linux/aarch64/scripts/run_linux_probe.sh`
   - `simulator/archive/guest-probe-legacy/aarch64/run_probe.sh`
 - Both scripts require explicit `QEMU_DIR=/your/qemu/path`.

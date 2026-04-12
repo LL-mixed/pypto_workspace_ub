@@ -35,7 +35,7 @@
 
 1. `simulator/vendor/qemu_8.2.0_ub/hw/ub/ub_link.c`
 2. `simulator/vendor/qemu_8.2.0_ub/hw/ub/hisi/ub_fm.c`
-3. `simulator/guest-linux/aarch64/run_ub_dual_node_urma_dataplane_workload_test.sh`
+3. `simulator/guest-linux/aarch64/scripts/run_ub_dual_node_urma_dataplane_workload_test.sh`
 
 改动要求：
 
@@ -79,7 +79,7 @@
 ### M3（P1）：Fail-Fast + 诊断标准化
 涉及文件：
 
-1. `simulator/guest-linux/aarch64/run_ub_dual_node_urma_dataplane_workload_test.sh`
+1. `simulator/guest-linux/aarch64/scripts/run_ub_dual_node_urma_dataplane_workload_test.sh`
 
 改动要求：
 
@@ -131,9 +131,9 @@ FM：
 ## 5. 回归与验收命令
 基础回归（每项至少 20 次）：
 
-1. `ITERATIONS=20 START_GAP_SECS=0 RUN_SECS=120 ./run_ub_dual_node_urma_dataplane_workload_test.sh`
-2. `ITERATIONS=20 START_GAP_SECS=3 RUN_SECS=120 ./run_ub_dual_node_urma_dataplane_workload_test.sh`
-3. `ITERATIONS=20 START_GAP_SECS=1 RUN_SECS=120 ./run_ub_dual_node_urma_dataplane_workload_test.sh`
+1. `ITERATIONS=20 START_GAP_SECS=0 RUN_SECS=120 ./scripts/run_ub_dual_node_urma_dataplane_workload_test.sh`
+2. `ITERATIONS=20 START_GAP_SECS=3 RUN_SECS=120 ./scripts/run_ub_dual_node_urma_dataplane_workload_test.sh`
+3. `ITERATIONS=20 START_GAP_SECS=1 RUN_SECS=120 ./scripts/run_ub_dual_node_urma_dataplane_workload_test.sh`
 
 异常注入回归：
 

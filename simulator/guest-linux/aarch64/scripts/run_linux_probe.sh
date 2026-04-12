@@ -1,7 +1,8 @@
 #!/bin/zsh
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORKSPACE_ROOT="$(cd "$ROOT_DIR/../../.." && pwd)"
 QEMU_DIR="${QEMU_DIR:-}"
 SCENARIO="$WORKSPACE_ROOT/simulator/scenarios/mvp_2host_single_domain.yaml"
@@ -67,7 +68,7 @@ if [[ ! -f "$KERNEL_IMAGE" ]]; then
 fi
 
 if [[ ! -f "$INITRAMFS_IMAGE" ]]; then
-  bash "$ROOT_DIR/build_initramfs.sh" >/dev/null
+  bash "$SCRIPT_DIR/build_initramfs.sh" >/dev/null
   INITRAMFS_IMAGE="$OUT_DIR/initramfs.cpio.gz"
 fi
 

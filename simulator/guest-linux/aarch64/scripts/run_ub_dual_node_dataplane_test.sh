@@ -1,7 +1,8 @@
 #!/bin/zsh
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ITERATIONS="${ITERATIONS:-3}"
 RUN_SECS="${RUN_SECS:-40}"
 START_GAP_SECS="${START_GAP_SECS:-1}"
@@ -13,4 +14,4 @@ RUN_SECS="$RUN_SECS" \
 ITERATIONS="$ITERATIONS" \
 START_GAP_SECS="$START_GAP_SECS" \
 RUN_ID="$RUN_ID_BASE" \
-"$ROOT_DIR/run_ub_dual_node_urma_dataplane_workload_test.sh"
+"$SCRIPT_DIR/run_ub_dual_node_urma_dataplane_workload_test.sh"

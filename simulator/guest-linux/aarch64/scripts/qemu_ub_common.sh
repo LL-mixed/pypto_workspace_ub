@@ -77,7 +77,7 @@ ensure_ub_guest_artifacts() {
         cd "$guest_root"
         BUILD_IN_VM="${UB_SYNC_BUILD_IN_VM:-1}" \
         BUILD_LINQU_DRIVER_IN_VM="${UB_SYNC_BUILD_LINQU_IN_VM:-1}" \
-        ./sync_ub_kernel_artifacts_from_vm.sh
+        ./scripts/sync_ub_kernel_artifacts_from_vm.sh
       )
     fi
   fi
@@ -91,7 +91,7 @@ ensure_ub_guest_artifacts() {
     echo "[ub_common] rebuilding initramfs" >&2
     (
       cd "$guest_root"
-      AARCH64_LINUX_CC="$cc" ./build_initramfs.sh >/dev/null
+      AARCH64_LINUX_CC="$cc" ./scripts/build_initramfs.sh >/dev/null
     )
   fi
 

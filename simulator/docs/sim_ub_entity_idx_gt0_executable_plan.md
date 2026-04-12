@@ -141,9 +141,9 @@
 
 涉及文件：
 
-1. `simulator/guest-linux/aarch64/run_ub_dual_node_probe.sh`
-2. `simulator/guest-linux/aarch64/run_ub_dual_node_ubcore_urma_e2e.sh`
-3. `simulator/guest-linux/aarch64/run_ub_dual_node_urma_dataplane_workload_test.sh`
+1. `simulator/guest-linux/aarch64/scripts/run_ub_dual_node_probe.sh`
+2. `simulator/guest-linux/aarch64/scripts/run_ub_dual_node_ubcore_urma_e2e.sh`
+3. `simulator/guest-linux/aarch64/scripts/run_ub_dual_node_urma_dataplane_workload_test.sh`
 
 改动点：
 
@@ -218,17 +218,17 @@
 cd simulator/guest-linux/aarch64
 AARCH64_LINUX_CC=/opt/homebrew/bin/aarch64-unknown-linux-gnu-gcc \
 UB_SIM_MULTI_ENTITY=1 UB_SIM_ENTITY_COUNT=2 \
-./run_ub_dual_node_probe.sh
+./scripts/run_ub_dual_node_probe.sh
 
 # 2) ubcore + URMA e2e
 AARCH64_LINUX_CC=/opt/homebrew/bin/aarch64-unknown-linux-gnu-gcc \
 UB_SIM_MULTI_ENTITY=1 UB_SIM_ENTITY_COUNT=2 ITERATIONS=20 RUN_SECS=180 \
-./run_ub_dual_node_ubcore_urma_e2e.sh
+./scripts/run_ub_dual_node_ubcore_urma_e2e.sh
 
 # 3) dataplane workload
 AARCH64_LINUX_CC=/opt/homebrew/bin/aarch64-unknown-linux-gnu-gcc \
 UB_SIM_MULTI_ENTITY=1 UB_SIM_ENTITY_COUNT=2 ITERATIONS=20 RUN_SECS=180 \
-./run_ub_dual_node_urma_dataplane_workload_test.sh
+./scripts/run_ub_dual_node_urma_dataplane_workload_test.sh
 ```
 
 ## 10. DoD（完成定义）
@@ -237,4 +237,3 @@ UB_SIM_MULTI_ENTITY=1 UB_SIM_ENTITY_COUNT=2 ITERATIONS=20 RUN_SECS=180 \
 2. auxiliary 设备稳定创建，udma/ipourma 可工作。
 3. 双节点 URMA 数据面测试稳定通过（20/20）。
 4. 开关关闭后可恢复到当前单 FE0 路径，无回归。
-

@@ -190,7 +190,7 @@ Guest ubus
 
 1. `simulator/vendor/qemu_8.2.0_ub/hw/ub/hisi/ubc_msgq.c`
 2. `simulator/vendor/qemu_8.2.0_ub/hw/ub/hisi/ub_fm.c`
-3. `simulator/guest-linux/aarch64/run_ub_dual_node_ubcore_urma_e2e.sh`
+3. `simulator/guest-linux/aarch64/scripts/run_ub_dual_node_ubcore_urma_e2e.sh`
 
 改动要求：
 
@@ -237,9 +237,9 @@ guid_seq=0x2
 ## 8. 回归与验收命令
 
 1. 静态枚举回归：
-   - `AARCH64_LINUX_CC=... zsh simulator/guest-linux/aarch64/run_ub_dual_node_probe.sh`
+   - `AARCH64_LINUX_CC=... zsh simulator/guest-linux/aarch64/scripts/run_ub_dual_node_probe.sh`
 2. 业务链路回归：
-   - `ITERATIONS=1 RUN_SECS=180 START_GAP_SECS=1 simulator/guest-linux/aarch64/run_ub_dual_node_ubcore_urma_e2e.sh`
+   - `ITERATIONS=1 RUN_SECS=180 START_GAP_SECS=1 simulator/guest-linux/aarch64/scripts/run_ub_dual_node_ubcore_urma_e2e.sh`
 3. 动态注入回归：
    - 启动后修改 entity plan（+1 UE / -1 UE），确认 guest 日志出现 `pool_rx` 对应 `UB_DEV_REG/UB_DEV_RLS` 处理。
 

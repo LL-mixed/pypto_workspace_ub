@@ -1,7 +1,8 @@
 #!/bin/zsh
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUT_DIR="$ROOT_DIR/out"
 MATRIX_OUT_DIR="${MATRIX_OUT_DIR:-$OUT_DIR/acceptance_matrix}"
 BASE_APPEND_EXTRA="${APPEND_EXTRA:-linqu_probe_skip=1 linqu_probe_load_helper=1 linqu_bizmsg_verify=1 linqu_urma_dp_verify=1}"
@@ -44,7 +45,7 @@ run_case() {
     MIN_PASS_RATE_PERCENT="$min_pass_rate" \
     RUN_ID="$case_run_id" \
     REPORT_FILE="$case_report" \
-    "$ROOT_DIR/run_ub_dual_node_urma_dataplane_workload_test.sh" >"$case_log" 2>&1; then
+    "$SCRIPT_DIR/run_ub_dual_node_urma_dataplane_workload_test.sh" >"$case_log" 2>&1; then
     rc=0
   else
     rc=$?

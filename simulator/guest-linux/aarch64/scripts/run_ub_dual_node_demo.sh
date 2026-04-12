@@ -2,7 +2,8 @@
 set -euo pipefail
 setopt null_glob
 
-ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORKSPACE_ROOT="$(cd "$ROOT_DIR/../../.." && pwd)"
 KERNEL_IMAGE="${KERNEL_IMAGE:-$ROOT_DIR/out/Image}"
 INITRAMFS_IMAGE="${INITRAMFS_IMAGE:-$ROOT_DIR/out/initramfs.cpio.gz}"
@@ -25,7 +26,7 @@ MAX_RUNTIME="${MAX_RUNTIME:-300}"
 RUN_ID="${RUN_ID:-$(date +%Y-%m-%d_%H-%M-%S)_${RANDOM}}"
 MAIN_PID=$$
 
-source "$ROOT_DIR/qemu_ub_common.sh"
+source "$SCRIPT_DIR/qemu_ub_common.sh"
 QEMU_BIN="$(ensure_qemu_ub_binary "$WORKSPACE_ROOT")"
 ensure_ub_guest_artifacts "$ROOT_DIR" "$KERNEL_IMAGE" "$INITRAMFS_IMAGE"
 
