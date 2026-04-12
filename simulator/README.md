@@ -22,5 +22,12 @@ Crates:
 
 Additional non-Rust device work:
 
-- `qemu-device`
-  Drop-in QEMU device-side source skeleton for the `linqu-ub` MMIO/ring device.
+- Archived legacy stack:
+  - `archive/qemu-device-legacy/qemu-device`
+    Drop-in QEMU device-side source skeleton for the historical `linqu-ub` MMIO/ring path.
+  - `archive/qemu-device-legacy/qemu`
+    Historical QEMU tree used by that legacy path.
+
+Active QEMU path for dual-node UB simulation:
+
+- `vendor/qemu_8.2.0_ub`

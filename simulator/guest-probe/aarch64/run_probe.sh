@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKSPACE_ROOT="$(cd "$ROOT_DIR/../../.." && pwd)"
-QEMU_DIR="$WORKSPACE_ROOT/simulator/vendor/qemu"
+QEMU_DIR="${QEMU_DIR:-}"
 SCENARIO="$WORKSPACE_ROOT/simulator/scenarios/mvp_2host_single_domain.yaml"
 PID_FILE="$ROOT_DIR/out/linqu_ub_probe.qemu.pid"
 LOG_FILE="$ROOT_DIR/out/linqu_ub_probe.serial.log"
@@ -12,6 +12,12 @@ QEMU_DEBUG_FLAGS="${QEMU_DEBUG_FLAGS:-}"
 QEMU_DEBUG_LOG="${QEMU_DEBUG_LOG:-$ROOT_DIR/out/linqu_ub_probe.qemu.log}"
 MACHINE="${MACHINE:-virt}"
 EXTRA_QEMU_ARGS="${EXTRA_QEMU_ARGS:-}"
+
+if [[ -z "$QEMU_DIR" ]]; then
+  echo "QEMU_DIR is required for legacy linqu-ub probe script." >&2
+  echo "Active dual-node flow uses simulator/vendor/qemu_8.2.0_ub scripts." >&2
+  exit 2
+fi
 
 bash "$ROOT_DIR/build_probe.sh" >/dev/null
 

@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKSPACE_ROOT="$(cd "$ROOT_DIR/../../.." && pwd)"
-QEMU_DIR="$WORKSPACE_ROOT/simulator/vendor/qemu"
+QEMU_DIR="${QEMU_DIR:-}"
 SCENARIO="$WORKSPACE_ROOT/simulator/scenarios/mvp_2host_single_domain.yaml"
 DEFAULT_KERNEL_IMAGE="$WORKSPACE_ROOT/simulator/guest-probe/aarch64/linux_blobs/Image"
 DEFAULT_INITRAMFS_IMAGE="$WORKSPACE_ROOT/simulator/guest-probe/aarch64/linux_blobs/initramfs.cpio.gz"
@@ -20,6 +20,12 @@ APPEND_EXTRA="${APPEND_EXTRA:-}"
 
 : "${KERNEL_IMAGE:=$DEFAULT_KERNEL_IMAGE}"
 : "${INITRAMFS_IMAGE:=$DEFAULT_INITRAMFS_IMAGE}"
+
+if [[ -z "$QEMU_DIR" ]]; then
+  echo "QEMU_DIR is required for legacy linqu-ub probe script." >&2
+  echo "Active dual-node flow uses simulator/vendor/qemu_8.2.0_ub scripts." >&2
+  exit 2
+fi
 
 if [[ ! -f "$KERNEL_IMAGE" ]]; then
   echo "KERNEL_IMAGE not found: $KERNEL_IMAGE" >&2

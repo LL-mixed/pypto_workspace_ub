@@ -307,7 +307,7 @@ bool linqu_ub_populate_ubios(LinquUbState *s,
      * bits simulator-specific.
      */
     ubc->ubcs[0].ubc_guid_low = cpu_to_le64(0x55425553494d0001ULL);
-    ubc->ubcs[0].ubc_guid_high = cpu_to_le64(0xCC08494E51554201ULL);
+    ubc->ubcs[0].ubc_guid_high = cpu_to_le64(0xCC08000000010542ULL);
     vendor = (LinquUbHiUbcPrivateData *)ubc->ubcs[0].vendor_info;
     memset(vendor, 0, sizeof(*vendor));
     vendor->ub_mem_version = cpu_to_le32(LINQU_UB_MEM_VERSION);
