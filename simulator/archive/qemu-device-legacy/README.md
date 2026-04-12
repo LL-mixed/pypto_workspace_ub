@@ -11,7 +11,7 @@ Reason for archive:
 - Moving these directories out of active top-level paths reduces accidental edits and context noise.
 
 Compatibility note:
-- Probe scripts that previously defaulted to `simulator/vendor/qemu` now default to this archive path:
+- Legacy probe scripts are explicitly guarded and require `--legacy`:
   - `simulator/guest-linux/aarch64/run_linux_probe.sh`
-  - `simulator/guest-probe/aarch64/run_probe.sh`
-- You can still override via `QEMU_DIR=/your/qemu/path`.
+  - `simulator/archive/guest-probe-legacy/aarch64/run_probe.sh`
+- Both scripts require explicit `QEMU_DIR=/your/qemu/path`.

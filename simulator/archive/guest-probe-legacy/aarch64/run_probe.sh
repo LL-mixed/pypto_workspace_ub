@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
-WORKSPACE_ROOT="$(cd "$ROOT_DIR/../../.." && pwd)"
+WORKSPACE_ROOT="$(cd "$ROOT_DIR/../../../.." && pwd)"
 QEMU_DIR="${QEMU_DIR:-}"
 SCENARIO="$WORKSPACE_ROOT/simulator/scenarios/mvp_2host_single_domain.yaml"
 PID_FILE="$ROOT_DIR/out/linqu_ub_probe.qemu.pid"
