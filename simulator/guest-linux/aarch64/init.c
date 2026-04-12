@@ -47,6 +47,8 @@ static bool read_file_line(const char *path, char *buf, size_t buf_size)
     return true;
 }
 
+static bool should_enter_demo_boot_flow(void);
+
 static void format_guid_be_hex(const unsigned char *guid, char *out, size_t out_size)
 {
     size_t i;
@@ -191,6 +193,27 @@ static bool should_run_bizmsg_verify(void)
 static bool should_run_urma_dp_verify(void)
 {
     return cmdline_has_option("linqu_urma_dp_verify=1");
+}
+
+static bool should_run_ub_chat(void)
+{
+    return cmdline_has_option("linqu_ub_chat=1");
+}
+
+static bool should_run_ub_rdma_demo(void)
+{
+    return cmdline_has_option("linqu_ub_rdma_demo=1");
+}
+
+static bool should_enter_demo_boot_flow(void)
+{
+    const char *flag = getenv("UB_RUN_DEMO_FROM_INIT");
+    return flag != NULL && strcmp(flag, "1") == 0;
+}
+
+static bool should_run_ub_rpc_demo(void)
+{
+    return cmdline_has_option("linqu_ub_rpc_demo=1");
 }
 
 static bool read_interrupt_count(const char *name, uint64_t *count_out)
@@ -425,6 +448,12 @@ static int run_bizmsg_roundtrip_probe(void)
     size_t j;
     int errors = 0;
 
+    /* In cluster mode, remote device 00002 may not appear in local sysfs */
+    if (access("/sys/bus/ub/devices/00002", F_OK) != 0) {
+        fprintf(stderr, "[init] bizmsg roundtrip skip: device 00002 not present\n");
+        return 0;
+    }
+
     for (attempt = 0; attempt < 100; attempt++) {
         if (read_file_line("/sys/bus/ub/devices/00002/port0/linkup",
                            link_buf, sizeof(link_buf)) &&
@@ -504,6 +533,63 @@ static void run_probe(void)
     }
 }
 
+static bool is_ipourma_ready(void)
+{
+    DIR *dir = opendir("/sys/class/net");
+    struct dirent *entry;
+    bool found = false;
+
+    if (!dir) return false;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strncmp(entry->d_name, "ipourma", strlen("ipourma")) == 0) {
+            found = true;
+            break;
+        }
+    }
+    closedir(dir);
+    return found;
+}
+
+static void dump_file(const char *path);
+
+static void dump_ipourma_stats(void)
+{
+    DIR *dir = opendir("/sys/class/net");
+    struct dirent *entry;
+    char path[256];
+
+    if (!dir) {
+        fprintf(stderr, "[init] opendir /sys/class/net failed: %s\n", strerror(errno));
+        return;
+    }
+
+    while ((entry = readdir(dir)) != NULL) {
+        if (strncmp(entry->d_name, "ipourma", strlen("ipourma")) != 0) {
+            continue;
+        }
+        snprintf(path, sizeof(path), "/sys/class/net/%s/query_ipourma_stats", entry->d_name);
+        dump_file(path);
+    }
+
+    closedir(dir);
+}
+
+static void wait_for_ipourma_interface(int timeout_secs)
+{
+    int i;
+    fprintf(stderr, "[init] waiting for ipourma network interface...\n");
+    for (i = 0; i < timeout_secs * 2; i++) {
+        if (is_ipourma_ready()) {
+            fprintf(stderr, "[init] ipourma interface is UP, waiting for stabilization...\n");
+            /* ADDITIONAL GRACE PERIOD: 5 seconds for stack stabilization */
+            sleep(5);
+            return;
+        }
+        usleep(500000); /* 500ms */
+    }
+    fprintf(stderr, "[init] TIMEOUT waiting for ipourma interface\n");
+}
+
 static void run_urma_dp_probe(void)
 {
     pid_t pid;
@@ -536,6 +622,132 @@ static void run_urma_dp_probe(void)
         fprintf(stderr, "[init] urma dataplane fail signal=%d\n", WTERMSIG(status));
     } else {
         fprintf(stderr, "[init] urma dataplane fail unknown status=0x%x\n", status);
+    }
+
+    dump_ipourma_stats();
+}
+
+static void try_insmod_module(const char *path, const char *module_name, bool required);
+
+static void run_ub_chat_probe(void)
+{
+    pid_t pid;
+    int status = 0;
+
+    pid = fork();
+    if (pid < 0) {
+        fprintf(stderr, "[init] fork for ub_chat failed: %s\n", strerror(errno));
+        return;
+    }
+    if (pid == 0) {
+        execl("/bin/linqu_ub_chat", "/bin/linqu_ub_chat", (char *)NULL);
+        fprintf(stderr, "[init] exec /bin/linqu_ub_chat failed: %s\n", strerror(errno));
+        _exit(127);
+    }
+
+    if (waitpid(pid, &status, 0) < 0) {
+        fprintf(stderr, "[init] waitpid ub_chat failed: %s\n", strerror(errno));
+        return;
+    }
+
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        fprintf(stderr, "[init] ub chat pass\n");
+        return;
+    }
+
+    if (WIFEXITED(status)) {
+        fprintf(stderr, "[init] ub chat fail exit=%d\n", WEXITSTATUS(status));
+    } else if (WIFSIGNALED(status)) {
+        fprintf(stderr, "[init] ub chat fail signal=%d\n", WTERMSIG(status));
+    }
+}
+
+static void run_ub_rdma_demo_probe(void)
+{
+    pid_t pid;
+    int status = 0;
+    int waited_ms = 0;
+    bool timed_out = false;
+    pid_t wait_ret;
+
+    /* Load uburma.ko before running RDMA demo */
+    try_insmod_module("/lib/modules/uburma.ko", "uburma", false);
+
+    pid = fork();
+    if (pid < 0) {
+        fprintf(stderr, "[init] fork for ub_rdma_demo failed: %s\n", strerror(errno));
+        return;
+    }
+    if (pid == 0) {
+        execl("/bin/linqu_ub_rdma_demo", "/bin/linqu_ub_rdma_demo", (char *)NULL);
+        fprintf(stderr, "[init] exec /bin/linqu_ub_rdma_demo failed: %s\n", strerror(errno));
+        _exit(127);
+    }
+
+    for (;;) {
+        wait_ret = waitpid(pid, &status, WNOHANG);
+        if (wait_ret == pid) {
+            break;
+        }
+        if (wait_ret < 0) {
+            fprintf(stderr, "[init] waitpid ub_rdma_demo failed: %s\n", strerror(errno));
+            return;
+        }
+        if (waited_ms >= 60000) {
+            fprintf(stderr, "[init] ub rdma demo timeout, killing pid=%d\n", pid);
+            kill(pid, SIGKILL);
+            waitpid(pid, &status, 0);
+            timed_out = true;
+            break;
+        }
+        usleep(100000);
+        waited_ms += 100;
+    }
+
+    if (!timed_out && WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        fprintf(stderr, "[init] ub rdma demo pass\n");
+        return;
+    }
+
+    if (timed_out) {
+        fprintf(stderr, "[init] ub rdma demo fail timeout\n");
+    } else if (WIFEXITED(status)) {
+        fprintf(stderr, "[init] ub rdma demo fail exit=%d\n", WEXITSTATUS(status));
+    } else if (WIFSIGNALED(status)) {
+        fprintf(stderr, "[init] ub rdma demo fail signal=%d\n", WTERMSIG(status));
+    }
+}
+
+static void run_ub_rpc_demo_probe(void)
+{
+    pid_t pid;
+    int status = 0;
+
+    pid = fork();
+    if (pid < 0) {
+        fprintf(stderr, "[init] fork for ub_rpc failed: %s\n", strerror(errno));
+        return;
+    }
+    if (pid == 0) {
+        execl("/bin/linqu_ub_rpc", "/bin/linqu_ub_rpc", (char *)NULL);
+        fprintf(stderr, "[init] exec /bin/linqu_ub_rpc failed: %s\n", strerror(errno));
+        _exit(127);
+    }
+
+    if (waitpid(pid, &status, 0) < 0) {
+        fprintf(stderr, "[init] waitpid ub_rpc failed: %s\n", strerror(errno));
+        return;
+    }
+
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        fprintf(stderr, "[init] ub rpc demo pass\n");
+        return;
+    }
+
+    if (WIFEXITED(status)) {
+        fprintf(stderr, "[init] ub rpc demo fail exit=%d\n", WEXITSTATUS(status));
+    } else if (WIFSIGNALED(status)) {
+        fprintf(stderr, "[init] ub rpc demo fail signal=%d\n", WTERMSIG(status));
     }
 }
 
@@ -649,11 +861,29 @@ static void dump_guest_payload_state(void)
     dump_dir_entries("/lib/modules");
 }
 
-static void try_insmod(const char *path)
+static bool is_module_loaded(const char *module_name)
+{
+    char path[256];
+
+    if (!module_name || !*module_name) {
+        return false;
+    }
+
+    snprintf(path, sizeof(path), "/sys/module/%s", module_name);
+    return access(path, F_OK) == 0;
+}
+
+static void try_insmod_module(const char *path, const char *module_name, bool required)
 {
     pid_t pid;
     int status = 0;
     int waited_ms = 0;
+
+    if (is_module_loaded(module_name)) {
+        fprintf(stderr, "[init] module %s already present, skip %s\n",
+                module_name, path);
+        return;
+    }
 
     if (access("/bin/insmod", X_OK) != 0) {
         fprintf(stderr, "[init] /bin/insmod unavailable: %s\n", strerror(errno));
@@ -661,7 +891,12 @@ static void try_insmod(const char *path)
     }
 
     if (access(path, R_OK) != 0) {
-        fprintf(stderr, "[init] %s unavailable: %s\n", path, strerror(errno));
+        if (required) {
+            fprintf(stderr, "[init] required module %s unavailable: %s\n",
+                    path, strerror(errno));
+        } else {
+            fprintf(stderr, "[init] optional module %s unavailable\n", path);
+        }
         return;
     }
 
@@ -696,10 +931,17 @@ static void try_insmod(const char *path)
 
 static void try_load_drivers(void)
 {
-    try_insmod("/lib/modules/hisi_ubus.ko");
-    try_insmod("/lib/modules/udma.ko");
+    /* Load in dependency order: each module's deps must be loaded first */
+    try_insmod_module("/lib/modules/ubus.ko", "ubus", false);
+    try_insmod_module("/lib/modules/ummu-core.ko", "ummu_core", false);
+    try_insmod_module("/lib/modules/ummu.ko", "ummu", false);
+    try_insmod_module("/lib/modules/ubase.ko", "ubase", false);
+    try_insmod_module("/lib/modules/hisi_ubus.ko", "hisi_ubus", true);
+    try_insmod_module("/lib/modules/ubcore.ko", "ubcore", false);
+    try_insmod_module("/lib/modules/udma.ko", "udma", true);
+    try_insmod_module("/lib/modules/ipourma.ko", "ipourma", false);
     if (cmdline_has_option("linqu_probe_load_helper=1")) {
-        try_insmod("/lib/modules/linqu_ub_drv.ko");
+        try_insmod_module("/lib/modules/linqu_ub_drv.ko", "linqu_ub_drv", false);
     }
 }
 
@@ -708,12 +950,11 @@ static void wait_for_ub_sysfs_ready(void)
     static const char *required_paths[] = {
         "/sys/bus/ub/devices/00001/port1/linkup",
         "/sys/bus/ub/devices/00001",
-        "/sys/bus/ub/devices/00002",
     };
     int attempt;
     size_t i;
 
-    for (attempt = 0; attempt < 120; attempt++) {
+    for (attempt = 0; attempt < 60; attempt++) {
         bool all_ready = true;
 
         for (i = 0; i < sizeof(required_paths) / sizeof(required_paths[0]); i++) {
@@ -757,26 +998,61 @@ static void write_sysfs_text(const char *path, const char *text)
 
 static void force_bind_ubase_for_qemu(void)
 {
-    static const char *devs[] = {"00001", "00002"};
+    static const char *devs[] = {"00001"};
     size_t i;
+    int attempt;
+    const int max_attempts = 60;
     char path[256];
     char text[32];
+    char driver_link[256];
+    char link_target[256];
+    ssize_t n;
+    bool bound = false;
 
     if (!cmdline_has_option("linqu_force_ubase_bind=1")) {
         return;
     }
 
     for (i = 0; i < sizeof(devs) / sizeof(devs[0]); i++) {
-        snprintf(path, sizeof(path), "/sys/bus/ub/devices/%s/driver_override",
-                 devs[i]);
-        write_sysfs_text(path, "ubase\n");
+        bound = false;
+        for (attempt = 0; attempt < max_attempts; attempt++) {
+            snprintf(driver_link, sizeof(driver_link),
+                     "/sys/bus/ub/devices/%s/driver", devs[i]);
+            n = readlink(driver_link, link_target, sizeof(link_target) - 1);
+            if (n > 0) {
+                const char *base = NULL;
 
-        snprintf(path, sizeof(path), "/sys/bus/ub/drivers/ub_generic_component/unbind");
-        snprintf(text, sizeof(text), "%s\n", devs[i]);
-        write_sysfs_text(path, text);
+                link_target[n] = '\0';
+                base = strrchr(link_target, '/');
+                if (!base) {
+                    base = link_target;
+                } else {
+                    base++;
+                }
+                if (!strcmp(base, "ubase")) {
+                    fprintf(stderr, "[init] %s already bound to ubase\n", devs[i]);
+                    bound = true;
+                    break;
+                }
+            }
 
-        snprintf(path, sizeof(path), "/sys/bus/ub/drivers_probe");
-        write_sysfs_text(path, text);
+            snprintf(path, sizeof(path), "/sys/bus/ub/devices/%s/driver_override",
+                     devs[i]);
+            write_sysfs_text(path, "ubase\n");
+
+            snprintf(path, sizeof(path), "/sys/bus/ub/drivers/ub_generic_component/unbind");
+            snprintf(text, sizeof(text), "%s\n", devs[i]);
+            write_sysfs_text(path, text);
+
+            snprintf(path, sizeof(path), "/sys/bus/ub/drivers_probe");
+            write_sysfs_text(path, text);
+            usleep(500000);
+        }
+
+        if (!bound) {
+            fprintf(stderr, "[init] warn: %s still not bound to ubase after %d attempts\n",
+                    devs[i], max_attempts);
+        }
     }
 }
 
@@ -803,7 +1079,9 @@ int main(void)
     dump_ub_state();
     dump_guest_payload_state();
     try_load_drivers();
+    fprintf(stderr, "[init] drivers loaded, entering wait_for_ub_sysfs_ready\n");
     wait_for_ub_sysfs_ready();
+    fprintf(stderr, "[init] wait_for_ub_sysfs_ready returned\n");
     dump_ub_state();
     if (should_run_bizmsg_verify()) {
         run_bizmsg_roundtrip_probe();
@@ -811,7 +1089,21 @@ int main(void)
     force_bind_ubase_for_qemu();
     dump_ub_state();
     if (should_run_urma_dp_verify()) {
+        /* Wait up to 30 seconds for asynchronous device registration to complete */
+        wait_for_ipourma_interface(30);
         run_urma_dp_probe();
+    }
+    if (should_run_ub_chat()) {
+        wait_for_ipourma_interface(30);
+        run_ub_chat_probe();
+    }
+    if (should_run_ub_rpc_demo()) {
+        wait_for_ipourma_interface(30);
+        run_ub_rpc_demo_probe();
+    }
+    if (should_run_ub_rdma_demo()) {
+        wait_for_ipourma_interface(30);
+        run_ub_rdma_demo_probe();
     }
     if (should_run_linqu_probe()) {
         run_probe();
@@ -819,6 +1111,12 @@ int main(void)
         fprintf(stderr, "[init] linqu_probe skipped by cmdline\n");
     }
     dump_ub_state();
+
+    if (should_enter_demo_boot_flow() && access("/bin/run_demo", X_OK) == 0) {
+        fprintf(stderr, "[init] switching to /bin/run_demo boot flow\n");
+        execl("/bin/run_demo", "/bin/run_demo", "--resume", (char *)NULL);
+        fprintf(stderr, "[init] exec /bin/run_demo failed: %s\n", strerror(errno));
+    }
 
     if (should_hold_after_probe()) {
         fprintf(stderr, "[init] holding after probe by cmdline\n");

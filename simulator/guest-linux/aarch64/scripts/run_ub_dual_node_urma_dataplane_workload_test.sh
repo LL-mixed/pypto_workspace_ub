@@ -15,6 +15,15 @@ START_GAP_SECS="${START_GAP_SECS:-3}"
 LINK_WAIT_SECS="${LINK_WAIT_SECS:-45}"
 QEMU_KEEP_ALIVE_ON_POWEROFF="${QEMU_KEEP_ALIVE_ON_POWEROFF:-0}"
 BASE_APPEND_EXTRA="${APPEND_EXTRA:-linqu_probe_skip=1 linqu_probe_load_helper=1 linqu_bizmsg_verify=1 linqu_urma_dp_verify=1}"
+if [[ -n "${RDINIT:-}" ]]; then
+  :
+elif [[ -f "$INITRAMFS_IMAGE" ]] && \
+  (gzip -dc "$INITRAMFS_IMAGE" 2>/dev/null | cpio -t 2>/dev/null | rg -q "(^|/)bin/busybox$") && \
+  (gzip -dc "$INITRAMFS_IMAGE" 2>/dev/null | cpio -t 2>/dev/null | rg -q "(^|/)bin/run_demo$"); then
+  RDINIT="/bin/run_demo"
+else
+  RDINIT="/init"
+fi
 ENTITY_PLAN_FILE="${UB_FM_ENTITY_PLAN_FILE:-/Volumes/repos/pypto_workspace/simulator/vendor/ub_topology_two_node_v2_entity.ini}"
 ENTITY_COUNT="${UB_SIM_ENTITY_COUNT:-2}"
 OUT_DIR="$ROOT_DIR/out"
@@ -158,7 +167,7 @@ start_node() {
       "${qemu_extra[@]}" \
       -kernel "$KERNEL_IMAGE" \
       -initrd "$INITRAMFS_IMAGE" \
-      -append "console=ttyAMA0 rdinit=/init linqu_urma_dp_role=${role} ${APPEND_EXTRA}" \
+      -append "console=ttyAMA0 rdinit=${RDINIT} linqu_urma_dp_role=${role} ${APPEND_EXTRA}" \
       >"$qemu_log" 2>&1 &
   echo $! > "$pid_file"
 }
@@ -404,17 +413,17 @@ check_link_early_or_fail() {
   local nodeb_log="$2"
   local timeout_s="$3"
   local deadline=$((SECONDS + timeout_s))
-  local fail_pat="ub_link: server listen failed|ub_link: failed to connect remote server|bizmsg roundtrip fail: remote linkup not ready|\\[init\\] ub sysfs wait timed out"
+  local fail_pat="ub_link: server listen failed|ub_link: failed to connect remote server|bizmsg roundtrip fail: remote linkup not ready|\\[init\\] ub sysfs wait timed out|Failed to bind socket|Failed to bind|failed to create listener|Address already in use|Operation not permitted"
   local ok_pat="ub_link: connected to remote server|ub_link: accepted connection|remote snapshot load done|remote cfg notify done"
 
   while (( SECONDS < deadline )); do
     if [[ -f "$nodea_log" ]] && rg -q "$fail_pat" "$nodea_log"; then
-      echo "early link failure detected on nodeA" >&2
+      echo "early qemu/link failure detected on nodeA" >&2
       dump_link_diagnostics "$nodea_log" "$nodeb_log"
       return 1
     fi
     if [[ -f "$nodeb_log" ]] && rg -q "$fail_pat" "$nodeb_log"; then
-      echo "early link failure detected on nodeB" >&2
+      echo "early qemu/link failure detected on nodeB" >&2
       dump_link_diagnostics "$nodea_log" "$nodeb_log"
       return 1
     fi

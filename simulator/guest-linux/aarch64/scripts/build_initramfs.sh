@@ -21,6 +21,8 @@ RPC_SRC="$ROOT_DIR/ub_rpc_demo.c"
 RPC_BIN="$OUT_DIR/linqu_ub_rpc"
 RDMA_SRC="$ROOT_DIR/ub_rdma_demo.c"
 RDMA_BIN="$OUT_DIR/linqu_ub_rdma_demo"
+RUN_DEMO_SRC="$ROOT_DIR/initramfs/run_demo"
+RUN_DEMO_BIN="$INITRAMFS_DIR/bin/run_demo"
 INIT_BIN_TO_USE="${INIT_TO_USE:-$INIT_BIN}"
 INITRAMFS_IMG="$OUT_DIR/initramfs.cpio.gz"
 
@@ -127,6 +129,15 @@ cp "$RDMA_BIN" "$INITRAMFS_DIR/bin/linqu_ub_rdma_demo"
 if [[ -n "$BUSYBOX" ]]; then
   cp "$BUSYBOX" "$INITRAMFS_DIR/bin/busybox"
   chmod +x "$INITRAMFS_DIR/bin/busybox"
+  ln -sf busybox "$INITRAMFS_DIR/bin/sh"
+  ln -sf busybox "$INITRAMFS_DIR/bin/ls"
+fi
+
+if [[ -f "$RUN_DEMO_SRC" ]]; then
+  cp "$RUN_DEMO_SRC" "$RUN_DEMO_BIN"
+  chmod +x "$RUN_DEMO_BIN"
+else
+  echo "[build_initramfs] warn: missing run_demo script template: $RUN_DEMO_SRC" >&2
 fi
 
 if [[ "$COPY_ALL_KO" == "1" ]] && [[ -d "$OUT_DIR" ]]; then
