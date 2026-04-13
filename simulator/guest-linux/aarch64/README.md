@@ -31,6 +31,8 @@ environment variables:
   - optional path to a static ARM64 busybox binary
   - if provided, the initramfs becomes a small userspace image with a shell
   - `run_demo` is copied to `/bin/run_demo` and can be used as `rdinit`
+  - if not provided, `scripts/build_initramfs.sh` falls back to local
+    `simulator/guest-linux/aarch64/busybox-aarch64` when present
 
 ## Files
 
@@ -42,6 +44,8 @@ environment variables:
   - builds `linqu_probe` and packs the initramfs
 - `scripts/run_linux_probe.sh`
   - launches `qemu-system-aarch64` with the kernel + initramfs
+- `scripts/launch_ub_dual_node_tmux.sh`
+  - launches a dual-node interactive tmux session with QEMU monitor and guest serial windows
 - `driver/linqu_ub_drv.c`
   - minimal guest-side platform driver
 - `scripts/build_driver.sh`
@@ -150,3 +154,79 @@ simulator/guest-linux/aarch64/scripts/run_ub_dual_node_ubcore_urma_e2e.sh
 - `[ipourma] Register netlink success.`
 - guest workload `/bin/linqu_urma_dp` does bidirectional socket send/recv over `ipourma`
 - both guests emit `[urma_dp] rx peer src=...` and `[init] urma dataplane pass`
+
+## Dual-Node Interactive tmux Session
+
+Use the tmux wrapper when you want both nodes booted into an interactive guest
+shell instead of auto-running the demo harness.
+
+Example:
+
+```sh
+cd simulator/guest-linux/aarch64
+./scripts/launch_ub_dual_node_tmux.sh
+```
+
+Default behavior:
+
+- guest kernel cmdline uses `rdinit=/init linqu_init_action=shell`
+- `/init` mounts `proc`, `sysfs`, `devtmpfs`, and `devpts`
+- each guest drops into a busybox shell (`~ #`)
+- no demo is auto-started
+
+tmux windows:
+
+- `0:control`
+  - QEMU launch progress, QMP resume, log paths, cleanup script
+- `1:nodeA-qemu`
+  - nodeA QEMU monitor
+- `2:nodeB-qemu`
+  - nodeB QEMU monitor
+- `3:nodeA-guest`
+  - nodeA guest serial console
+- `4:nodeB-guest`
+  - nodeB guest serial console
+
+Useful overrides:
+
+```sh
+# custom session name
+TMUX_SESSION_NAME=ub-dev ./scripts/launch_ub_dual_node_tmux.sh
+
+# boot guest directly into run_demo instead of shell
+RDINIT=/bin/run_demo \
+APPEND_EXTRA="linqu_probe_skip=1 linqu_probe_load_helper=1 linqu_ub_chat=1 linqu_ub_rpc_demo=1" \
+./scripts/launch_ub_dual_node_tmux.sh
+
+# force legacy /init dispatch into probe mode
+RDINIT=/init \
+APPEND_EXTRA="linqu_init_action=probe" \
+./scripts/launch_ub_dual_node_tmux.sh
+```
+
+Cleanup:
+
+- the launcher prints a per-run cleanup script under `out/`
+- running that script stops both QEMU processes and removes the QMP sockets
+
+## Initramfs Entry Model
+
+Current initramfs entrypoints are intentionally separated:
+
+- `/init`
+  - early shell wrapper
+  - mounts base virtual filesystems
+  - dispatches only by `linqu_init_action=...`
+- `/bin/linqu_init`
+  - compiled bootstrap/orchestration binary from `init.c`
+  - handles driver bootstrap, readiness waits, and demo/probe execution
+- `/bin/run_demo`
+  - demo-oriented entrypoint
+  - can be used as `rdinit=/bin/run_demo`
+  - invokes `/bin/linqu_init` when bootstrap is needed
+
+Recommended usage:
+
+- automated validation: `rdinit=/bin/run_demo`
+- interactive shell bring-up: `rdinit=/init linqu_init_action=shell`
+- legacy probe-only path: `rdinit=/init linqu_init_action=probe`
