@@ -108,8 +108,6 @@ ensure_ub_guest_artifacts() {
   local need_sync=0
   local cc
   local artifact_source="${UB_GUEST_ARTIFACT_SOURCE:-auto}"
-  local required_modules=("hisi_ubus.ko" "udma.ko")
-  local mod=""
 
   if [[ "$kernel_image" != "$default_kernel" || "$initramfs_image" != "$default_initramfs" ]]; then
     if [[ ! -f "$kernel_image" ]]; then
@@ -129,11 +127,9 @@ ensure_ub_guest_artifacts() {
     if [[ "${UB_FORCE_SYNC_ARTIFACTS:-0}" == "1" || ! -f "$default_kernel" ]]; then
       need_sync=1
     fi
-    for mod in "${required_modules[@]}"; do
-      if [[ ! -f "$modules_dir/$mod" ]]; then
-        need_sync=1
-      fi
-    done
+    if [[ ! -d "$modules_dir" ]]; then
+      need_sync=1
+    fi
 
     if (( need_sync )); then
       echo "[ub_common] preparing guest artifacts via build_guest_artifacts.sh (source=$artifact_source)" >&2
