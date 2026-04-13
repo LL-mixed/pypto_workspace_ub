@@ -5,9 +5,23 @@ log() {
   echo "[run_demo] $*"
 }
 
+mount_fs() {
+  local fstype="$1"
+  local target="$2"
+  /bin/busybox mkdir -p "$target" >/dev/null 2>&1 || true
+  /bin/busybox mount -t "$fstype" none "$target" >/dev/null 2>&1 || true
+}
+
+bootstrap_fs() {
+  mount_fs proc /proc
+  mount_fs sysfs /sys
+  mount_fs devtmpfs /dev
+  mount_fs devpts /dev/pts
+}
+
 read_cmdline() {
-  if [ -r /proc/cmdline ]; then
-    cmdline="$(cat /proc/cmdline)"
+if [ -r /proc/cmdline ]; then
+    cmdline="$(/bin/busybox cat /proc/cmdline)"
   else
     cmdline=""
   fi
@@ -129,11 +143,13 @@ enter_shell() {
   return 1
 }
 
+bootstrap_fs
+
 if [ "${UB_RUN_DEMO_FROM_INIT:-0}" != "1" ] && [ "${1-}" != "--resume" ]; then
-  log "bootstrap phase: launching /init"
+  log "bootstrap phase: launching /bin/linqu_init"
   UB_RUN_DEMO_FROM_INIT=1
   export UB_RUN_DEMO_FROM_INIT
-  exec /init "$@"
+  exec /bin/linqu_init "$@"
 fi
 
 shift_args=0

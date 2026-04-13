@@ -15,15 +15,7 @@ START_GAP_SECS="${START_GAP_SECS:-3}"
 LINK_WAIT_SECS="${LINK_WAIT_SECS:-45}"
 QEMU_KEEP_ALIVE_ON_POWEROFF="${QEMU_KEEP_ALIVE_ON_POWEROFF:-0}"
 BASE_APPEND_EXTRA="${APPEND_EXTRA:-linqu_probe_skip=1 linqu_probe_load_helper=1 linqu_bizmsg_verify=1 linqu_urma_dp_verify=1}"
-if [[ -n "${RDINIT:-}" ]]; then
-  :
-elif [[ -f "$INITRAMFS_IMAGE" ]] && \
-  (gzip -dc "$INITRAMFS_IMAGE" 2>/dev/null | cpio -t 2>/dev/null | rg -q "(^|/)bin/busybox$") && \
-  (gzip -dc "$INITRAMFS_IMAGE" 2>/dev/null | cpio -t 2>/dev/null | rg -q "(^|/)bin/run_demo$"); then
-  RDINIT="/bin/run_demo"
-else
-  RDINIT="/init"
-fi
+RDINIT="${RDINIT:-/bin/run_demo}"
 ENTITY_PLAN_FILE="${UB_FM_ENTITY_PLAN_FILE:-/Volumes/repos/pypto_workspace/simulator/vendor/ub_topology_two_node_v2_entity.ini}"
 ENTITY_COUNT="${UB_SIM_ENTITY_COUNT:-2}"
 OUT_DIR="$ROOT_DIR/out"

@@ -98,10 +98,14 @@ ensure_ub_guest_artifacts() {
       echo "AARCH64_LINUX_CC is required to rebuild initramfs" >&2
       return 1
     fi
+    local busybox_bin="${BUSYBOX:-}"
+    if [[ -z "$busybox_bin" ]] && [[ -x "$guest_root/busybox-aarch64" ]]; then
+      busybox_bin="$guest_root/busybox-aarch64"
+    fi
     echo "[ub_common] rebuilding initramfs" >&2
     (
       cd "$guest_root"
-      AARCH64_LINUX_CC="$cc" ./scripts/build_initramfs.sh >/dev/null
+      AARCH64_LINUX_CC="$cc" BUSYBOX="$busybox_bin" ./scripts/build_initramfs.sh >/dev/null
     )
   fi
 

@@ -133,7 +133,7 @@ cd "$QEMU_DIR"
   -device "linqu-ub,scenario-path=$SCENARIO" \
   -kernel "$KERNEL_IMAGE" \
   -initrd "$INITRAMFS_IMAGE" \
-  -append "console=ttyAMA0 rdinit=/init ${APPEND_EXTRA}" \
+  -append "console=ttyAMA0 rdinit=/init linqu_init_action=probe ${APPEND_EXTRA}" \
   >"$SERIAL_LOG" 2>&1 &
 
 echo $! > "$PID_FILE"
