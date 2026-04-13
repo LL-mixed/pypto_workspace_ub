@@ -38,19 +38,43 @@
    - `ub_mem_drain_start()` / `ub_mem_drain_state()`
 4. OBMM 现状：
    - `obmm_export` 可产出 `tokenid + uba`。
-   - `obmm_import` 输入有 `tokenid/scna/dcna/deid/seid`，但当前结构路径中未形成稳定的“decoder 配置调用链”。
+   - `obmm_import` 已存在 sim decoder callback 挂点。
+   - `obmm_import` 已能从 `region->priv` 解析 `remote_uba/token_value`。
+   - 但当前仍缺少实际 callback 注册者和稳定的控制通道实现，因此尚未形成真实 decoder 配置调用链。
 
-结论：guest 并非“没有 decoder 能力”，缺的是“面向仿真后端的、以 OBMM 为上游的 decoder 服务层”。
+结论：guest 并非“没有 decoder 能力”，也不是 `obmm` 完全没有挂点；真正缺的是“实际注册 callback 并驱动 QEMU backend 的 sim decoder 服务实现”。
 
 ### 2.3 QEMU 现状约束
 
 1. `ub_ubc.c` 已暴露 CFG1 decoder capability（含 cmdq/evtq/cfg/wmask）。
-2. 但当前未形成与 guest `ub_decoder_map/unmap` 对应的 decoder 配置执行后端（主要是 capability 暴露，不是完整跨节点内存访问数据面）。
-3. 控制面基础存在：
+2. QEMU 中已存在 `SIM_DEC_OP_MAP/UNMAP/SYNC/QUERY`、`decoder_map_table`、`sim_dec_lookup_by_pa()` 以及基于 strict DMA 路径的跨节点 WRITE/READ 数据处理。
+3. `hw/ub/hisi/ubc_msgq.c` 已能通过 `SIM_DEC_CTRL_CMD` 分发私有控制命令到 `ubc_handle_sim_dec_message()`。
+4. 控制面基础存在：
    - CMDQ / Mailbox / UE2UE / CtrlQ 路径可用。
    - `ub_link_write_message()` 跨节点消息发送机制可复用。
 
-结论：需要新增“QEMU decoder emu backend”，并由 guest 侧模拟 decoder 驱动通过控制通道驱动它。
+结论：QEMU backend 不再是“从零开始”，当前主缺口已经转移到 guest 侧 sim decoder service / ctrl adapter 的落地与端到端验收闭环。
+
+### 2.4 基于代码的实现状态矩阵
+
+1. 已存在：
+   - QEMU `SIM_DEC_OP_*` 协议定义与命令处理。
+   - QEMU `decoder_map_table`、overlap 检查、`MAP/UNMAP/QUERY/SYNC` 基本处理。
+   - QEMU `sim_dec_lookup_by_pa()` 与基于 strict DMA 路径的远端 WRITE/READ 分发。
+   - QEMU `ubc_msgq` 对 `SIM_DEC_CTRL_CMD` 的消息收发适配。
+   - guest `obmm_import/unimport` 中的 sim decoder callback 挂点。
+   - guest `obmm_import` 对 `region->priv` 中 `remote_uba/token_value` 的解析。
+
+2. 部分存在但未闭环：
+   - guest `obmm` 侧已有 callback registration API，但当前缺少实际注册者。
+   - `obmm_sim_decoder.h` 只有结构和注册接口，缺少对应 `.c` 实现和模块初始化。
+   - 设计文档中提到的 `ub_sim_decoder_service` / `ctrl_adapter` 在代码树中尚未形成稳定模块边界。
+
+3. 仍未完成：
+   - guest 到 QEMU 的稳定控制通道实现。
+   - `obmm_import -> sim decoder map -> QEMU ack -> import success` 的真实联调验证。
+   - cross-node memory access 的专用 e2e 用例与回归门槛。
+   - READ/WRITE/UNMAP/SYNC 的故障注入与一致性验收。
 
 ---
 
@@ -58,10 +82,10 @@
 
 旧版文档存在以下不可实施问题：
 
-1. 把 guest 侧写成抽象“ubus 驱动配置 decoder”，没有明确独立服务层、接口、调用点。
+1. 把 guest 侧写成抽象“ubus 驱动配置 decoder”，没有明确独立服务层、接口、注册点和模块装配方式。
 2. 没有定义 OBMM 到 decoder 的契约字段来源（尤其 `UBA/Token/EID/scna/dcna`）。
 3. 没有把“向下管控通道”落到现有机制（msg/cmdq/ctrlq）上。
-4. 假设 QEMU 已有完整 decoder/UMMU 内存访问闭环，和现状不符。
+4. 错把 QEMU 描述成“仅 capability 暴露、backend 未实现”，和当前代码现状不符。
 
 ---
 
@@ -173,7 +197,7 @@ MAP payload 至少包含：
 
 ## 6. QEMU 侧配套实现要求
 
-在 `simulator/vendor/qemu_8.2.0_ub/hw/ub/ub_ubc.c` 新增 decoder emu backend：
+QEMU 侧已存在 decoder emu backend 基础，实现上应改为“补强和验收”，而不是“从零新增”：
 
 1. 维护 `decoder_map_table`（可按 PA 区间组织，支持 overlap 检查）。
 2. 接收并处理 `SIM_DEC_OP_*` 控制命令，返回明确状态码。
@@ -206,9 +230,10 @@ MAP payload 至少包含：
 
 修改项：
 
-1. 增加 guest `ub_sim_decoder_service` 与 `ctrl_adapter` 框架。
-2. 定义 `SIM_DEC_OP_*` 协议与 QEMU 命令处理骨架。
-3. 在 `obmm_import/unimport` 挂接 map/unmap（可先仅日志 + stub ack）。
+1. 新增 guest `ub_sim_decoder_service` 与 `ctrl_adapter` 实现文件，而不是只停留在头文件和文档。
+2. 模块初始化时注册 `obmm_register_import_callback()` / `obmm_register_unimport_callback()`。
+3. 复用现有 `obmm_import/unimport` 挂点，打通最小 `map/unmap` 请求-响应链路。
+4. 统一确定控制面主路径；P0 只选一条，建议优先 `HiMsgQ HISI_PRIVATE/SIM_DEC_CTRL_CMD`，不要同时铺开多条控制面。
 
 验收：
 
@@ -219,8 +244,8 @@ MAP payload 至少包含：
 
 修改项：
 
-1. QEMU `decoder_map_table` 实装与冲突检测。
-2. WRITE 访问命中映射后可跨节点写入目标内存。
+1. 基于现有 QEMU `decoder_map_table` 和 strict DMA hook，完成 guest 真实接入验证。
+2. WRITE 访问命中映射后可跨节点写入目标内存，并补 guest/QEMU 双侧可观测日志。
 3. 完成最小 token 校验（至少检查 token_id 非空与条目匹配）。
 
 验收：
@@ -232,7 +257,7 @@ MAP payload 至少包含：
 
 修改项：
 
-1. READ 请求与回包。
+1. 基于现有 QEMU READ request/response 基础，补齐 guest 侧闭环验证。
 2. `SIM_DEC_OP_SYNC` 与 `ub_mem_drain_*` 协同。
 3. ownership 场景回归。
 
@@ -262,14 +287,38 @@ MAP payload 至少包含：
 2. 不能跳过控制面直接改 QEMU 内部表；所有映射必须可追踪到 guest 命令。
 3. 不能只做 capability 暴露；必须有 map/unmap 的执行与数据面命中。
 4. import 侧 `remote_uba` 来源必须显式定义并可审计，避免隐式魔法字段。
+5. 不能为了推进 cross-node memory access 破坏当前已通过的 URMA/chat/rpc/rdma 数据面；每个阶段都必须复跑 dual-node 3-demo 作为回归闸门。
 
 ---
 
-## 10. 本版结论
+## 10. 下一步实施清单（基于当前代码）
 
-本版将方案从“概念性报文导向设计”修订为“可实施的分层设计”：
+按当前代码基线，建议直接按以下顺序推进：
 
-1. 明确新增 guest 侧模拟 decoder 驱动（服务层 + 控制通道适配层）。
-2. 明确 OBMM 上游调用点与字段契约。
-3. 明确 QEMU 下游必须补齐的 decoder backend 职责。
-4. 给出可执行分期与验收标准，可直接指导后续开发与联调。
+1. guest 侧新增 `ub_sim_decoder_service.c`
+   - 注册 `obmm_import/unimport` callback。
+   - 完成 `obmm_sim_dec_import_info <-> SIM_DEC MAP/UNMAP` 结构转换。
+
+2. guest 侧新增控制适配层
+   - 先只实现一条控制面主路径。
+   - 做同步请求/响应，不做异步扩展。
+
+3. 增加最小 e2e 验证程序
+   - 构造一段 import memory。
+   - 验证 cross-node WRITE 后对端可见。
+   - 再补 cross-node READ。
+
+4. 加回归门槛
+   - 每次改动后先跑 cross-node memory access e2e。
+   - 再跑 dual-node `chat -> rpc -> rdma`，确认不破坏既有数据面。
+
+---
+
+## 11. 本版结论
+
+本版将方案进一步从“可实施的分层设计”收敛为“基于当前代码现状的实施设计”：
+
+1. 明确 QEMU backend 与 `obmm` 挂点已有部分实现，当前主缺口在 guest 侧 service / ctrl adapter。
+2. 明确 `remote_uba/token_value` 的 import 元数据路径已经存在，可直接复用。
+3. 明确后续实施应以“guest callback 注册 + 控制面落地 + e2e 验证”三件事为主线。
+4. 明确任何推进都必须以“不破坏当前 dual-node URMA 数据面回归”为前提。

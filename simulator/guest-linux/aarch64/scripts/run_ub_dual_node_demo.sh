@@ -7,6 +7,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORKSPACE_ROOT="$(cd "$ROOT_DIR/../../.." && pwd)"
 KERNEL_IMAGE="${KERNEL_IMAGE:-$ROOT_DIR/out/Image}"
 INITRAMFS_IMAGE="${INITRAMFS_IMAGE:-$ROOT_DIR/out/initramfs.cpio.gz}"
+RDINIT="${RDINIT:-/init}"
 TOPOLOGY_FILE="${TOPOLOGY_FILE:-/Volumes/repos/pypto_workspace/simulator/vendor/ub_topology_two_node_v0.ini}"
 SHARED_DIR="${UB_FM_SHARED_DIR:-/tmp/ub-qemu-links-dual}"
 RUN_SECS="${RUN_SECS:-180}"
@@ -217,6 +218,30 @@ validate_rdma_log() {
     "${node_name} rdma cfg table cleanup failure" || return 1
 }
 
+validate_obmm_log() {
+  local node_name="$1"
+  local log_file="$2"
+  assert_log_has "$log_file" "\\[ub_obmm\\] pass" "${node_name} obmm pass" || return 1
+  assert_log_absent "$log_file" "\\[ub_obmm\\] fail" "${node_name} obmm fail" || return 1
+  if [[ "$node_name" == "nodeA" ]]; then
+    assert_log_has "$log_file" "\\[ub_obmm\\] export -> ok mem_id=[0-9]+ uba=0x[0-9a-f]+ token=[0-9]+" \
+      "${node_name} obmm export" || return 1
+    assert_log_has "$log_file" "\\[ub_obmm\\] sync: nodeB import acknowledged" \
+      "${node_name} obmm import ack" || return 1
+    assert_log_has "$log_file" "\\[ub_obmm\\] sync: nodeB unimport acknowledged" \
+      "${node_name} obmm unimport ack" || return 1
+    assert_log_has "$log_file" "\\[ub_obmm\\] unexport -> ok mem_id=[0-9]+" \
+      "${node_name} obmm unexport" || return 1
+  else
+    assert_log_has "$log_file" "\\[ub_obmm\\] mem_window mar=[0-9]+ decode=0x[0-9a-f]+ cc=\\[0x[0-9a-f]+,0x[0-9a-f]+\\]" \
+      "${node_name} obmm mem window" || return 1
+    assert_log_has "$log_file" "\\[ub_obmm\\] import -> ok mem_id=[0-9]+ local_pa=0x[0-9a-f]+ local_cna=0x[0-9a-f]+ remote_cna=0x[0-9a-f]+" \
+      "${node_name} obmm import" || return 1
+    assert_log_has "$log_file" "\\[ub_obmm\\] unimport -> ok mem_id=[0-9]+" \
+      "${node_name} obmm unimport" || return 1
+  fi
+}
+
 validate_kernel_health_log() {
   local node_name="$1"
   local log_file="$2"
@@ -260,7 +285,7 @@ start_node() {
       "${qemu_extra[@]}" \
       -kernel "$KERNEL_IMAGE" \
       -initrd "$INITRAMFS_IMAGE" \
-      -append "console=ttyAMA0 rdinit=/init linqu_urma_dp_role=${role} ${APPEND_EXTRA}" \
+      -append "console=ttyAMA0 rdinit=${RDINIT} linqu_urma_dp_role=${role} ${APPEND_EXTRA}" \
       >"$qemu_log" 2>&1 &
   echo $! > "$pid_file"
 }
@@ -487,10 +512,14 @@ run_iteration() {
   local nodea_qmp="$QMP_DIR/nodeA.${iter}.sock"
   local nodeb_qmp="$QMP_DIR/nodeB.${iter}.sock"
   local rdma_enabled=0
+  local obmm_enabled=0
   local stale_files=()
 
   if [[ "$APPEND_EXTRA" == *"linqu_ub_rdma_demo=1"* ]]; then
     rdma_enabled=1
+  fi
+  if [[ "$APPEND_EXTRA" == *"linqu_obmm_demo=1"* ]]; then
+    obmm_enabled=1
   fi
 
   rm -f /tmp/ub-qemu/ub-bus-instance-*.lock
@@ -633,6 +662,34 @@ run_iteration() {
     esac
   fi
 
+  if [[ "$obmm_enabled" -eq 1 ]]; then
+    wait_for_log_pass_or_fail "$nodea_guest_log" "\\[init\\] ub obmm demo pass" "\\[init\\] ub obmm demo fail" "$RUN_SECS"
+    case "$?" in
+      0) ;;
+      1)
+        echo "iteration ${iter}: nodeA obmm demo reported failure" >&2
+        return 16
+        ;;
+      *)
+        echo "iteration ${iter}: nodeA obmm demo did not finish within ${RUN_SECS}s" >&2
+        return 16
+        ;;
+    esac
+
+    wait_for_log_pass_or_fail "$nodeb_guest_log" "\\[init\\] ub obmm demo pass" "\\[init\\] ub obmm demo fail" "$RUN_SECS"
+    case "$?" in
+      0) ;;
+      1)
+        echo "iteration ${iter}: nodeB obmm demo reported failure" >&2
+        return 16
+        ;;
+      *)
+        echo "iteration ${iter}: nodeB obmm demo did not finish within ${RUN_SECS}s" >&2
+        return 16
+        ;;
+    esac
+  fi
+
   sleep 1
   cleanup_pid "$nodea_pid_file"
   cleanup_pid "$nodeb_pid_file"
@@ -653,6 +710,10 @@ run_iteration() {
   if [[ "$APPEND_EXTRA" == *"linqu_ub_rdma_demo=1"* ]]; then
     validate_rdma_log "nodeA" "$nodea_guest_log" || return 1
     validate_rdma_log "nodeB" "$nodeb_guest_log" || return 1
+  fi
+  if [[ "$APPEND_EXTRA" == *"linqu_obmm_demo=1"* ]]; then
+    validate_obmm_log "nodeA" "$nodea_guest_log" || return 1
+    validate_obmm_log "nodeB" "$nodeb_guest_log" || return 1
   fi
   validate_kernel_health_log "nodeA" "$nodea_guest_log" || return 1
   validate_kernel_health_log "nodeB" "$nodeb_guest_log" || return 1

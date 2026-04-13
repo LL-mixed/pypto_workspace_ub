@@ -101,6 +101,8 @@ int main(void)
     puts("[TEST] Loading kernel modules...");
     try_insmod("/lib/modules/ubus.ko");
     try_insmod("/lib/modules/hisi_ubus.ko");
+    try_insmod("/lib/modules/obmm.ko");
+    try_insmod("/lib/modules/ub-sim-decoder.ko");
     try_insmod("/lib/modules/ubcore.ko");
     try_insmod("/lib/modules/ubase.ko");
     try_insmod("/lib/modules/ipourma.ko");

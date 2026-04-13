@@ -21,6 +21,8 @@ RPC_SRC="$ROOT_DIR/ub_rpc_demo.c"
 RPC_BIN="$OUT_DIR/linqu_ub_rpc"
 RDMA_SRC="$ROOT_DIR/ub_rdma_demo.c"
 RDMA_BIN="$OUT_DIR/linqu_ub_rdma_demo"
+OBMM_SRC="$ROOT_DIR/ub_obmm_demo.c"
+OBMM_BIN="$OUT_DIR/linqu_ub_obmm_demo"
 RUN_DEMO_SRC="$ROOT_DIR/initramfs/run_demo"
 RUN_DEMO_BIN="$INITRAMFS_DIR/bin/run_demo"
 INIT_BIN_TO_USE="${INIT_TO_USE:-$INIT_BIN}"
@@ -29,6 +31,8 @@ INITRAMFS_IMG="$OUT_DIR/initramfs.cpio.gz"
 LINQU_MODULE="${LINQU_UB_GUEST_MODULE:-}"
 HISI_UBUS_MODULE="${HISI_UBUS_GUEST_MODULE:-}"
 UBUS_MODULE="${UB_UBUS_GUEST_MODULE:-}"
+UB_SIM_DECODER_MODULE="${UB_SIM_DECODER_GUEST_MODULE:-}"
+OBMM_MODULE="${UB_OBMM_GUEST_MODULE:-}"
 UBASE_MODULE="${UB_UBASE_GUEST_MODULE:-}"
 UBCORE_MODULE="${UB_UBCORE_GUEST_MODULE:-}"
 UDMA_MODULE="${UB_UDMA_GUEST_MODULE:-}"
@@ -116,6 +120,7 @@ fi
 "$AARCH64_LINUX_CC" -static -O2 -Wall -Wextra "$CHAT_SRC" -o "$CHAT_BIN"
 "$AARCH64_LINUX_CC" -static -O2 -Wall -Wextra "$RPC_SRC" -o "$RPC_BIN"
 "$AARCH64_LINUX_CC" -static -O2 -Wall -Wextra "$RDMA_SRC" -o "$RDMA_BIN"
+"$AARCH64_LINUX_CC" -static -O2 -Wall -Wextra "$OBMM_SRC" -o "$OBMM_BIN"
 
 cp "$INIT_BIN_TO_USE" "$INITRAMFS_DIR/init"
 chmod +x "$INITRAMFS_DIR/init"
@@ -125,6 +130,7 @@ cp "$INSMOD_BIN" "$INITRAMFS_DIR/bin/insmod"
 cp "$CHAT_BIN" "$INITRAMFS_DIR/bin/linqu_ub_chat"
 cp "$RPC_BIN" "$INITRAMFS_DIR/bin/linqu_ub_rpc"
 cp "$RDMA_BIN" "$INITRAMFS_DIR/bin/linqu_ub_rdma_demo"
+cp "$OBMM_BIN" "$INITRAMFS_DIR/bin/linqu_ub_obmm_demo"
 
 if [[ -n "$BUSYBOX" ]]; then
   cp "$BUSYBOX" "$INITRAMFS_DIR/bin/busybox"
@@ -149,11 +155,13 @@ if [[ "$COPY_ALL_KO" == "1" ]] && [[ -d "$OUT_DIR" ]]; then
 fi
 
 copy_module_if_present "$LINQU_MODULE" "linqu_ub_drv.ko" 0
-copy_module_if_present "$HISI_UBUS_MODULE" "hisi_ubus.ko" 1
+copy_module_if_present "$HISI_UBUS_MODULE" "hisi_ubus.ko" 0
 copy_module_if_present "$UBUS_MODULE" "ubus.ko" 0
+copy_module_if_present "$UB_SIM_DECODER_MODULE" "ub-sim-decoder.ko" 0
+copy_module_if_present "$OBMM_MODULE" "obmm.ko" 0
 copy_module_if_present "$UBASE_MODULE" "ubase.ko" 0
 copy_module_if_present "$UBCORE_MODULE" "ubcore.ko" 0
-copy_module_if_present "$UDMA_MODULE" "udma.ko" 1
+copy_module_if_present "$UDMA_MODULE" "udma.ko" 0
 copy_module_if_present "$IPOURMA_MODULE" "ipourma.ko" 0
 copy_module_if_present "$UBURMA_MODULE" "uburma.ko" 0
 copy_module_if_present "$UMMU_CORE_MODULE" "ummu-core.ko" 0

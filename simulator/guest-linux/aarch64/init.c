@@ -205,6 +205,11 @@ static bool should_run_ub_rdma_demo(void)
     return cmdline_has_option("linqu_ub_rdma_demo=1");
 }
 
+static bool should_run_obmm_demo(void)
+{
+    return cmdline_has_option("linqu_obmm_demo=1");
+}
+
 static bool should_enter_demo_boot_flow(void)
 {
     const char *flag = getenv("UB_RUN_DEMO_FROM_INIT");
@@ -627,7 +632,8 @@ static void run_urma_dp_probe(void)
     dump_ipourma_stats();
 }
 
-static void try_insmod_module(const char *path, const char *module_name, bool required);
+static bool wait_for_path(const char *path, int attempts, int sleep_ms);
+static void try_insmod_module(const char *path, const char *module_name);
 
 static void run_ub_chat_probe(void)
 {
@@ -670,8 +676,12 @@ static void run_ub_rdma_demo_probe(void)
     bool timed_out = false;
     pid_t wait_ret;
 
-    /* Load uburma.ko before running RDMA demo */
-    try_insmod_module("/lib/modules/uburma.ko", "uburma", false);
+    /* Best-effort bootstrap; built-in vs module is not part of probe semantics. */
+    try_insmod_module("/lib/modules/uburma.ko", "uburma");
+    if (!wait_for_path("/dev/uburma", 30, 100) &&
+        !wait_for_path("/sys/class/ubcore/udma0", 30, 100)) {
+        fprintf(stderr, "[init] rdma interfaces not ready before demo start\n");
+    }
 
     pid = fork();
     if (pid < 0) {
@@ -748,6 +758,66 @@ static void run_ub_rpc_demo_probe(void)
         fprintf(stderr, "[init] ub rpc demo fail exit=%d\n", WEXITSTATUS(status));
     } else if (WIFSIGNALED(status)) {
         fprintf(stderr, "[init] ub rpc demo fail signal=%d\n", WTERMSIG(status));
+    }
+}
+
+static void run_obmm_demo_probe(void)
+{
+    pid_t pid;
+    int status = 0;
+    int waited_ms = 0;
+    bool timed_out = false;
+    pid_t wait_ret;
+
+    if (!wait_for_path("/dev/obmm", 50, 100) &&
+        !wait_for_path("/sys/module/obmm", 50, 100)) {
+        fprintf(stderr, "[init] obmm interfaces not ready before demo start\n");
+    }
+
+    pid = fork();
+    if (pid < 0) {
+        fprintf(stderr, "[init] fork for ub_obmm_demo failed: %s\n", strerror(errno));
+        return;
+    }
+    if (pid == 0) {
+        execl("/bin/linqu_ub_obmm_demo", "/bin/linqu_ub_obmm_demo", (char *)NULL);
+        fprintf(stderr, "[init] exec /bin/linqu_ub_obmm_demo failed: %s\n",
+                strerror(errno));
+        _exit(127);
+    }
+
+    for (;;) {
+        wait_ret = waitpid(pid, &status, WNOHANG);
+        if (wait_ret == pid) {
+            break;
+        }
+        if (wait_ret < 0) {
+            fprintf(stderr, "[init] waitpid ub_obmm_demo failed: %s\n",
+                    strerror(errno));
+            return;
+        }
+        if (waited_ms >= 60000) {
+            fprintf(stderr, "[init] ub obmm demo timeout, killing pid=%d\n", pid);
+            kill(pid, SIGKILL);
+            waitpid(pid, &status, 0);
+            timed_out = true;
+            break;
+        }
+        usleep(100000);
+        waited_ms += 100;
+    }
+
+    if (!timed_out && WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        fprintf(stderr, "[init] ub obmm demo pass\n");
+        return;
+    }
+
+    if (timed_out) {
+        fprintf(stderr, "[init] ub obmm demo fail timeout\n");
+    } else if (WIFEXITED(status)) {
+        fprintf(stderr, "[init] ub obmm demo fail exit=%d\n", WEXITSTATUS(status));
+    } else if (WIFSIGNALED(status)) {
+        fprintf(stderr, "[init] ub obmm demo fail signal=%d\n", WTERMSIG(status));
     }
 }
 
@@ -873,7 +943,21 @@ static bool is_module_loaded(const char *module_name)
     return access(path, F_OK) == 0;
 }
 
-static void try_insmod_module(const char *path, const char *module_name, bool required)
+static bool wait_for_path(const char *path, int attempts, int sleep_ms)
+{
+    int i;
+
+    for (i = 0; i < attempts; i++) {
+        if (access(path, F_OK) == 0) {
+            return true;
+        }
+        usleep((useconds_t)sleep_ms * 1000);
+    }
+
+    return false;
+}
+
+static void try_insmod_module(const char *path, const char *module_name)
 {
     pid_t pid;
     int status = 0;
@@ -886,21 +970,18 @@ static void try_insmod_module(const char *path, const char *module_name, bool re
     }
 
     if (access("/bin/insmod", X_OK) != 0) {
-        fprintf(stderr, "[init] /bin/insmod unavailable: %s\n", strerror(errno));
+        fprintf(stderr, "[init] insmod unavailable, skip bootstrap for %s: %s\n",
+                module_name, strerror(errno));
         return;
     }
 
     if (access(path, R_OK) != 0) {
-        if (required) {
-            fprintf(stderr, "[init] required module %s unavailable: %s\n",
-                    path, strerror(errno));
-        } else {
-            fprintf(stderr, "[init] optional module %s unavailable\n", path);
-        }
+        fprintf(stderr, "[init] bootstrap module file absent for %s (%s), continue\n",
+                module_name, path);
         return;
     }
 
-    fprintf(stderr, "[init] insmod start %s\n", path);
+    fprintf(stderr, "[init] bootstrap insmod %s via %s\n", module_name, path);
     pid = fork();
     if (pid == 0) {
         execl("/bin/insmod", "/bin/insmod", path, (char *)NULL);
@@ -923,29 +1004,36 @@ static void try_insmod_module(const char *path, const char *module_name, bool re
     }
 
     if (WIFEXITED(status)) {
-        fprintf(stderr, "[init] insmod exit %s code=%d\n", path, WEXITSTATUS(status));
+        fprintf(stderr, "[init] bootstrap insmod %s exit=%d\n",
+                module_name, WEXITSTATUS(status));
     } else if (WIFSIGNALED(status)) {
-        fprintf(stderr, "[init] insmod signal %s sig=%d\n", path, WTERMSIG(status));
+        fprintf(stderr, "[init] bootstrap insmod %s signal=%d\n",
+                module_name, WTERMSIG(status));
     }
 }
 
-static void try_load_drivers(void)
+static void bootstrap_drivers(void)
 {
-    /* Load in dependency order: each module's deps must be loaded first */
-    try_insmod_module("/lib/modules/ubus.ko", "ubus", false);
-    try_insmod_module("/lib/modules/ummu-core.ko", "ummu_core", false);
-    try_insmod_module("/lib/modules/ummu.ko", "ummu", false);
-    try_insmod_module("/lib/modules/ubase.ko", "ubase", false);
-    try_insmod_module("/lib/modules/hisi_ubus.ko", "hisi_ubus", true);
-    try_insmod_module("/lib/modules/ubcore.ko", "ubcore", false);
-    try_insmod_module("/lib/modules/udma.ko", "udma", true);
-    try_insmod_module("/lib/modules/ipourma.ko", "ipourma", false);
+    /*
+     * Best-effort bootstrap only.
+     * Harness semantics must bind to interfaces and functionality, not module form.
+     */
+    try_insmod_module("/lib/modules/ubus.ko", "ubus");
+    try_insmod_module("/lib/modules/ummu-core.ko", "ummu_core");
+    try_insmod_module("/lib/modules/ummu.ko", "ummu");
+    try_insmod_module("/lib/modules/ubase.ko", "ubase");
+    try_insmod_module("/lib/modules/hisi_ubus.ko", "hisi_ubus");
+    try_insmod_module("/lib/modules/obmm.ko", "obmm");
+    try_insmod_module("/lib/modules/ub-sim-decoder.ko", "ub_sim_decoder");
+    try_insmod_module("/lib/modules/ubcore.ko", "ubcore");
+    try_insmod_module("/lib/modules/udma.ko", "udma");
+    try_insmod_module("/lib/modules/ipourma.ko", "ipourma");
     if (cmdline_has_option("linqu_probe_load_helper=1")) {
-        try_insmod_module("/lib/modules/linqu_ub_drv.ko", "linqu_ub_drv", false);
+        try_insmod_module("/lib/modules/linqu_ub_drv.ko", "linqu_ub_drv");
     }
 }
 
-static void wait_for_ub_sysfs_ready(void)
+static bool wait_for_ub_sysfs_ready(void)
 {
     static const char *required_paths[] = {
         "/sys/bus/ub/devices/00001/port1/linkup",
@@ -965,12 +1053,13 @@ static void wait_for_ub_sysfs_ready(void)
         }
         if (all_ready) {
             fprintf(stderr, "[init] ub sysfs ready via %s\n", required_paths[0]);
-            return;
+            return true;
         }
         usleep(100000);
     }
 
     fprintf(stderr, "[init] ub sysfs wait timed out\n");
+    return false;
 }
 
 static void write_sysfs_text(const char *path, const char *text)
@@ -1078,9 +1167,9 @@ int main(void)
 
     dump_ub_state();
     dump_guest_payload_state();
-    try_load_drivers();
-    fprintf(stderr, "[init] drivers loaded, entering wait_for_ub_sysfs_ready\n");
-    wait_for_ub_sysfs_ready();
+    bootstrap_drivers();
+    fprintf(stderr, "[init] bootstrap complete, entering wait_for_ub_sysfs_ready\n");
+    (void)wait_for_ub_sysfs_ready();
     fprintf(stderr, "[init] wait_for_ub_sysfs_ready returned\n");
     dump_ub_state();
     if (should_run_bizmsg_verify()) {
@@ -1104,6 +1193,10 @@ int main(void)
     if (should_run_ub_rdma_demo()) {
         wait_for_ipourma_interface(30);
         run_ub_rdma_demo_probe();
+    }
+    if (should_run_obmm_demo()) {
+        wait_for_ipourma_interface(30);
+        run_obmm_demo_probe();
     }
     if (should_run_linqu_probe()) {
         run_probe();
