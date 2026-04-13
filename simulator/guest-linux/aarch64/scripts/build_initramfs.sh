@@ -168,6 +168,13 @@ if [[ -n "$BUSYBOX" ]]; then
   link_busybox_applet grep
   link_busybox_applet ps
   link_busybox_applet uname
+  link_busybox_applet ifconfig
+  link_busybox_applet route
+  link_busybox_applet netstat
+  link_busybox_applet ip
+  link_busybox_applet arp
+  link_busybox_applet ping
+  link_busybox_applet ping6
 fi
 
 if [[ -f "$RUN_DEMO_SRC" ]]; then

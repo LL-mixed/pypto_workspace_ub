@@ -185,10 +185,10 @@ cd simulator/guest-linux/aarch64
 
 Default behavior:
 
-- guest kernel cmdline uses `rdinit=/init linqu_init_action=shell`
-- `/init` mounts `proc`, `sysfs`, `devtmpfs`, and `devpts`
-- each guest drops into a busybox shell (`~ #`)
-- no demo is auto-started
+- guest kernel cmdline uses `rdinit=/bin/run_demo`
+- `run_demo` first enters `/bin/linqu_init` to complete bootstrap/readiness
+- after bootstrap it drops into a busybox shell (`~ #`)
+- no demo is auto-started unless explicit demo flags are passed
 
 tmux windows:
 
@@ -244,5 +244,11 @@ Current initramfs entrypoints are intentionally separated:
 Recommended usage:
 
 - automated validation: `rdinit=/bin/run_demo`
-- interactive shell bring-up: `rdinit=/init linqu_init_action=shell`
+- interactive shell bring-up: `rdinit=/bin/run_demo`
 - legacy probe-only path: `rdinit=/init linqu_init_action=probe`
+
+IPv4 bootstrap:
+
+- `linqu_init` now configures `ipourma0` during bootstrap instead of leaving IPv4 setup to each demo.
+- Preferred cmdline knobs are `linqu_ipourma_ipv4=<local>` and `linqu_ipourma_peer_ipv4=<peer>`.
+- If those are omitted, `linqu_urma_dp_role=nodeA|nodeB` still falls back to `10.0.0.1/10.0.0.2`.
