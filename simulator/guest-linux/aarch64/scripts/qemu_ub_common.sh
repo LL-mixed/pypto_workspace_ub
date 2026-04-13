@@ -1,5 +1,15 @@
 #!/bin/zsh
 
+ensure_sim_kernel_append_defaults() {
+  local append_extra="${1:-}"
+
+  if [[ "$append_extra" != *"obmm.skip_cache_maintain="* ]]; then
+    append_extra="${append_extra} obmm.skip_cache_maintain=1"
+  fi
+
+  echo "${append_extra## }"
+}
+
 qemu_ub_bin_path() {
   local workspace_root="$1"
   echo "$workspace_root/simulator/vendor/qemu_8.2.0_ub/build/qemu-system-aarch64"
