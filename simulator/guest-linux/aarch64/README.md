@@ -229,6 +229,56 @@ Cleanup:
 - the launcher prints a per-run cleanup script under `out/`
 - running that script stops both QEMU processes and removes the QMP sockets
 
+## Four-Node Interactive tmux Session
+
+Use the four-node tmux wrapper when you want a full-mesh `nodeA/nodeB/nodeC/nodeD`
+interactive environment instead of auto-running a matrix harness.
+
+Example:
+
+```sh
+guest-linux/aarch64/scripts/launch_ub_four_node_tmux.sh
+```
+
+Default behavior:
+
+- topology: `vendor/ub_topology_four_node_full_mesh.ini`
+- guest kernel cmdline uses `rdinit=/bin/run_demo`
+- each guest completes `/bin/run_demo` bootstrap first
+- the control window waits until all four guest logs reach
+  `[run_demo] boot flow completed, dropping to shell`
+- only after that does the session report the interactive shells as ready
+
+Useful overrides:
+
+```sh
+# launch without monitor/guest side windows, keep only the control window
+TMUX_QEMU_WINDOWS=0 TMUX_GUEST_WINDOWS=0 \
+guest-linux/aarch64/scripts/launch_ub_four_node_tmux.sh
+
+# custom session name
+TMUX_SESSION_NAME=ub-four-dev \
+guest-linux/aarch64/scripts/launch_ub_four_node_tmux.sh
+
+# increase bootstrap wait budget if guest bring-up is slower
+BOOT_WAIT_SECS=300 \
+guest-linux/aarch64/scripts/launch_ub_four_node_tmux.sh
+```
+
+tmux windows:
+
+- `0:control`
+  - QEMU launch progress, QMP resume, per-node log paths, bootstrap shell-gate status, cleanup script
+- `nodeX-qemu`
+  - per-node QEMU monitor windows when `TMUX_QEMU_WINDOWS=1`
+- `nodeX-guest`
+  - per-node guest serial console windows when `TMUX_GUEST_WINDOWS=1`
+
+Cleanup:
+
+- the launcher prints a per-run cleanup script under `out/`
+- running that script stops all four QEMU processes and removes the per-run QMP sockets
+
 ## Manual Demo Order In tmux
 
 After `guest-linux/aarch64/scripts/launch_ub_dual_node_tmux.sh` boots both guests

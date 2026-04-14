@@ -19,6 +19,9 @@ RUN_ID="${RUN_ID:-$(date +%Y-%m-%d_%H-%M-%S)_tmux4_${RANDOM}}"
 SESSION_NAME="${TMUX_SESSION_NAME:-ub-four-node-${RUN_ID}}"
 APPEND_EXTRA="${APPEND_EXTRA:-linqu_probe_skip=1 linqu_probe_load_helper=1}"
 PORT_BASE="${TMUX_PORT_BASE:-$((46000 + RANDOM % 10000))}"
+CREATE_QEMU_WINDOWS="${TMUX_QEMU_WINDOWS:-1}"
+CREATE_GUEST_WINDOWS="${TMUX_GUEST_WINDOWS:-1}"
+BOOT_WAIT_SECS="${BOOT_WAIT_SECS:-180}"
 CONTROL_LOG="$LOG_DIR/${RUN_ID}_tmux4/control.log"
 CONTROL_SCRIPT="$OUT_DIR/tmux_four_node_control.${RUN_ID}.sh"
 CLEANUP_SCRIPT="$OUT_DIR/tmux_four_node_cleanup.${RUN_ID}.sh"
@@ -44,10 +47,13 @@ wait_port_cmd() {
 
 echo "[tmux] waiting for ${label} on 127.0.0.1:${port}"
 while ! nc -z 127.0.0.1 ${port} >/dev/null 2>&1; do sleep 0.2; done
-echo "[tmux] connected to ${label}"
-nc 127.0.0.1 ${port} || true
-echo "[tmux] ${label} disconnected"
-exec \${SHELL:-/bin/zsh} -i
+while true; do
+  echo "[tmux] connected to ${label}"
+  nc 127.0.0.1 ${port} || true
+  echo "[tmux] ${label} disconnected"
+  sleep 1
+  while ! nc -z 127.0.0.1 ${port} >/dev/null 2>&1; do sleep 0.5; done
+done
 EOC
 }
 
@@ -116,9 +122,43 @@ SESSION_NAME='__SESSION_NAME__'
 NODE_IDS=(nodeA nodeB nodeC nodeD)
 NODE_IPS=(10.0.0.1 10.0.0.2 10.0.0.3 10.0.0.4)
 PORT_BASE='__PORT_BASE__'
+BOOT_WAIT_SECS='__BOOT_WAIT_SECS__'
 
 log() {
   echo "[tmux4-control] $*" | tee -a "$CONTROL_LOG"
+}
+
+wait_guest_shell_gate() {
+  local guest_log="$1"
+  local node_id="$2"
+  local timeout_s="$3"
+
+  python3 - "$guest_log" "$node_id" "$timeout_s" <<'PY'
+import pathlib
+import sys
+import time
+
+guest_log = pathlib.Path(sys.argv[1])
+node_id = sys.argv[2]
+timeout_s = int(sys.argv[3])
+deadline = time.time() + timeout_s
+ok_marker = "[run_demo] boot flow completed, dropping to shell"
+bad_markers = ("Kernel panic", "No working init found", "TIMEOUT")
+
+while time.time() < deadline:
+    text = guest_log.read_text(errors="ignore") if guest_log.exists() else ""
+    if ok_marker in text:
+        print(f"[tmux4-control] {node_id} bootstrap shell gate ok")
+        sys.exit(0)
+    for marker in bad_markers:
+        if marker in text:
+            print(f"[tmux4-control] {node_id} bootstrap failed marker={marker}")
+            sys.exit(2)
+    time.sleep(1)
+
+print(f"[tmux4-control] {node_id} bootstrap shell gate timeout after {timeout_s}s")
+sys.exit(1)
+PY
 }
 
 cont_qemu() {
@@ -188,7 +228,7 @@ start_node() {
 QEMU_BIN="$(ensure_qemu_ub_binary "$WORKSPACE_ROOT")"
 ensure_ub_guest_artifacts "$ROOT_DIR" "$KERNEL_IMAGE" "$INITRAMFS_IMAGE"
 
-rm -f /tmp/ub-qemu/ub-bus-instance-*.lock
+rm -f /tmp/ub-qemu/ub-bus-instance-*.lock(N)
 rm -f "$QMP_DIR"/*.sock(N)
 touch "$CONTROL_LOG"
 
@@ -197,6 +237,7 @@ log "qemu_bin=$QEMU_BIN"
 log "topology=$TOPOLOGY_FILE"
 log "append_extra=$APPEND_EXTRA"
 log "logs_dir=$(dirname "$CONTROL_LOG")"
+log "boot_wait_secs=$BOOT_WAIT_SECS"
 
 integer idx=0
 for node_id in "${NODE_IDS[@]}"; do
@@ -236,12 +277,19 @@ for node_id in "${NODE_IDS[@]}"; do
   log "${node_id} serial tcp=127.0.0.1:${serial_port}"
   idx=$((idx + 1))
 done
+
+for node_id in "${NODE_IDS[@]}"; do
+  guest_log="$(dirname "$CONTROL_LOG")/${node_id}_guest.log"
+  log "waiting bootstrap shell gate for ${node_id}"
+  wait_guest_shell_gate "$guest_log" "$node_id" "$BOOT_WAIT_SECS" | tee -a "$CONTROL_LOG"
+done
+
 log "cleanup=$CLEANUP_SCRIPT"
-log "interactive shells expected after /bin/run_demo bootstrap"
+log "interactive shells ready after /bin/run_demo bootstrap"
 
 exec ${SHELL:-/bin/zsh} -i
 EOC
-perl -0pi -e 's#__SCRIPT_DIR__#'$SCRIPT_DIR'#g; s#__APPEND_EXTRA__#'"${APPEND_EXTRA//\//\\/}"'#g; s#__WORKSPACE_ROOT__#'$WORKSPACE_ROOT'#g; s#__ROOT_DIR__#'$ROOT_DIR'#g; s#__KERNEL_IMAGE__#'"${KERNEL_IMAGE//\//\\/}"'#g; s#__INITRAMFS_IMAGE__#'"${INITRAMFS_IMAGE//\//\\/}"'#g; s#__RDINIT__#'"${RDINIT//\//\\/}"'#g; s#__TOPOLOGY_FILE__#'"${TOPOLOGY_FILE//\//\\/}"'#g; s#__ENTITY_PLAN_FILE__#'"${ENTITY_PLAN_FILE//\//\\/}"'#g; s#__ENTITY_COUNT__#'$ENTITY_COUNT'#g; s#__SHARED_DIR__#'"${SHARED_DIR//\//\\/}"'#g; s#__QMP_DIR__#'"${QMP_DIR//\//\\/}"'#g; s#__CONTROL_LOG__#'"${CONTROL_LOG//\//\\/}"'#g; s#__CLEANUP_SCRIPT__#'"${CLEANUP_SCRIPT//\//\\/}"'#g; s#__RUN_ID__#'$RUN_ID'#g; s#__SESSION_NAME__#'$SESSION_NAME'#g; s#__PORT_BASE__#'$PORT_BASE'#g' "$CONTROL_SCRIPT"
+perl -0pi -e 's#__SCRIPT_DIR__#'$SCRIPT_DIR'#g; s#__APPEND_EXTRA__#'"${APPEND_EXTRA//\//\\/}"'#g; s#__WORKSPACE_ROOT__#'$WORKSPACE_ROOT'#g; s#__ROOT_DIR__#'$ROOT_DIR'#g; s#__KERNEL_IMAGE__#'"${KERNEL_IMAGE//\//\\/}"'#g; s#__INITRAMFS_IMAGE__#'"${INITRAMFS_IMAGE//\//\\/}"'#g; s#__RDINIT__#'"${RDINIT//\//\\/}"'#g; s#__TOPOLOGY_FILE__#'"${TOPOLOGY_FILE//\//\\/}"'#g; s#__ENTITY_PLAN_FILE__#'"${ENTITY_PLAN_FILE//\//\\/}"'#g; s#__ENTITY_COUNT__#'$ENTITY_COUNT'#g; s#__SHARED_DIR__#'"${SHARED_DIR//\//\\/}"'#g; s#__QMP_DIR__#'"${QMP_DIR//\//\\/}"'#g; s#__CONTROL_LOG__#'"${CONTROL_LOG//\//\\/}"'#g; s#__CLEANUP_SCRIPT__#'"${CLEANUP_SCRIPT//\//\\/}"'#g; s#__RUN_ID__#'$RUN_ID'#g; s#__SESSION_NAME__#'$SESSION_NAME'#g; s#__PORT_BASE__#'$PORT_BASE'#g; s#__BOOT_WAIT_SECS__#'$BOOT_WAIT_SECS'#g' "$CONTROL_SCRIPT"
 chmod +x "$CONTROL_SCRIPT"
 
 tmux new-session -d -s "$SESSION_NAME" -n control "/bin/zsh -lc '$CONTROL_SCRIPT'"
@@ -250,8 +298,12 @@ integer idx=0
 for node_id in "${NODE_IDS[@]}"; do
   mon_port=$((PORT_BASE + idx))
   serial_port=$((PORT_BASE + 16 + idx))
-  tmux new-window -t "$SESSION_NAME":$((1 + idx)) -n "${node_id}-qemu" "/bin/zsh -lc '$(wait_port_cmd "${node_id} qemu monitor" "$mon_port")'"
-  tmux new-window -t "$SESSION_NAME":$((5 + idx)) -n "${node_id}-guest" "/bin/zsh -lc '$(wait_port_cmd "${node_id} guest serial" "$serial_port")'"
+  if [[ "$CREATE_QEMU_WINDOWS" == "1" ]]; then
+    tmux new-window -t "$SESSION_NAME" -n "${node_id}-qemu" "/bin/zsh -lc '$(wait_port_cmd "${node_id} qemu monitor" "$mon_port")'"
+  fi
+  if [[ "$CREATE_GUEST_WINDOWS" == "1" ]]; then
+    tmux new-window -t "$SESSION_NAME" -n "${node_id}-guest" "/bin/zsh -lc '$(wait_port_cmd "${node_id} guest serial" "$serial_port")'"
+  fi
   idx=$((idx + 1))
 done
 
