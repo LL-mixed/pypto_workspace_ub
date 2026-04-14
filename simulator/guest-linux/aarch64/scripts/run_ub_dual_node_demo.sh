@@ -148,14 +148,14 @@ validate_rpc_log() {
   assert_log_has "$log_file" "\\[ub_rpc\\] pass" "${node_name} rpc pass" || return 1
   assert_log_absent "$log_file" "\\[ub_rpc\\] fail" "${node_name} rpc fail" || return 1
   if [[ "$node_name" == "nodeA" ]]; then
-    assert_log_has "$log_file" "\\[RPC\\] client op=ECHO msg_id=1 status=OK result=\"greeting from NodeA\" expected=\"greeting from NodeA\" verified=1" \
+    assert_log_has "$log_file" "\\[RPC\\] client local=10\\.0\\.0\\.1 peer=10\\.0\\.0\\.2 op=ECHO msg_id=1 status=OK result=\"greeting from rpc client 10\\.0\\.0\\.1\" expected=\"greeting from rpc client 10\\.0\\.0\\.1\" verified=1" \
       "${node_name} rpc echo semantic" || return 1
-    assert_log_has "$log_file" "\\[RPC\\] client op=CRC32 msg_id=2 status=OK payload=\"buffer from NodeA for CRC verification over ub_link\" result=\"0x[0-9a-f]{8}\" expected=\"0x[0-9a-f]{8}\" verified=1" \
+    assert_log_has "$log_file" "\\[RPC\\] client local=10\\.0\\.0\\.1 peer=10\\.0\\.0\\.2 op=CRC32 msg_id=2 status=OK payload=\"rpc crc payload from 10\\.0\\.0\\.1 to 10\\.0\\.0\\.2 over ub_link\" result=\"0x[0-9a-f]{8}\" expected=\"0x[0-9a-f]{8}\" verified=1" \
       "${node_name} rpc crc semantic" || return 1
   else
-    assert_log_has "$log_file" "\\[RPC\\] server handled op=ECHO msg_id=1" \
+    assert_log_has "$log_file" "\\[RPC\\] server local=10\\.0\\.0\\.2 peer=10\\.0\\.0\\.1 handled op=ECHO msg_id=1 rpc_count=1" \
       "${node_name} rpc server echo handled" || return 1
-    assert_log_has "$log_file" "\\[RPC\\] server handled op=CRC32 msg_id=2" \
+    assert_log_has "$log_file" "\\[RPC\\] server local=10\\.0\\.0\\.2 peer=10\\.0\\.0\\.1 handled op=CRC32 msg_id=2 rpc_count=2" \
       "${node_name} rpc server crc handled" || return 1
   fi
 }
@@ -210,10 +210,10 @@ validate_rdma_log() {
   if [[ "$node_name" == "nodeA" ]]; then
     assert_log_has "$log_file" "\\[ub_rdma\\] step 9\\.5: send_request -> ok len=[0-9]+" \
       "${node_name} rdma send request" || return 1
-    assert_log_has "$log_file" "\\[ub_rdma\\] step 9\\.5: recv_reply -> ok payload=\"rdma reply payload from NodeB\"" \
+    assert_log_has "$log_file" "\\[ub_rdma\\] step 9\\.5: recv_reply -> ok payload=\"rdma reply payload from responder\"" \
       "${node_name} rdma reply payload" || return 1
   else
-    assert_log_has "$log_file" "\\[ub_rdma\\] step 9\\.5: recv_request -> ok payload=\"rdma request payload from NodeA\"" \
+    assert_log_has "$log_file" "\\[ub_rdma\\] step 9\\.5: recv_request -> ok payload=\"rdma request payload from initiator\"" \
       "${node_name} rdma request payload" || return 1
     assert_log_has "$log_file" "\\[ub_rdma\\] step 9\\.5: send_reply -> ok len=[0-9]+" \
       "${node_name} rdma send reply" || return 1
@@ -254,11 +254,11 @@ validate_obmm_log() {
   if [[ "$node_name" == "nodeA" ]]; then
     assert_log_has "$log_file" "\\[ub_obmm\\] export -> ok mem_id=[0-9]+ uba=0x[0-9a-f]+ token=[0-9]+" \
       "${node_name} obmm export" || return 1
-    assert_log_has "$log_file" "\\[ub_obmm\\] sync: nodeB import acknowledged" \
+    assert_log_has "$log_file" "\\[ub_obmm\\] sync: importer acknowledged visibility" \
       "${node_name} obmm import ack" || return 1
-    assert_log_has "$log_file" "\\[ub_obmm\\] nodeA verify nodeB write -> ok payload=\"obmm-import-payload-from-nodeB\"" \
-      "${node_name} obmm verify nodeB write" || return 1
-    assert_log_has "$log_file" "\\[ub_obmm\\] sync: nodeB unimport acknowledged" \
+    assert_log_has "$log_file" "\\[ub_obmm\\] exporter verify importer write -> ok payload=\"obmm-import-payload-from-importer\"" \
+      "${node_name} obmm verify importer write" || return 1
+    assert_log_has "$log_file" "\\[ub_obmm\\] sync: importer unimport acknowledged" \
       "${node_name} obmm unimport ack" || return 1
     assert_log_has "$log_file" "\\[ub_obmm\\] unexport -> ok mem_id=[0-9]+" \
       "${node_name} obmm unexport" || return 1
@@ -267,9 +267,9 @@ validate_obmm_log() {
       "${node_name} obmm mem window" || return 1
     assert_log_has "$log_file" "\\[ub_obmm\\] import -> ok mem_id=[0-9]+ local_pa=0x[0-9a-f]+ local_cna=0x[0-9a-f]+ remote_cna=0x[0-9a-f]+" \
       "${node_name} obmm import" || return 1
-    assert_log_has "$log_file" "\\[ub_obmm\\] nodeB verify nodeA write -> ok payload=\"obmm-export-payload-from-nodeA\"" \
-      "${node_name} obmm verify nodeA write" || return 1
-    assert_log_has "$log_file" "\\[ub_obmm\\] sync: nodeA writeback acknowledged" \
+    assert_log_has "$log_file" "\\[ub_obmm\\] importer verify exporter write -> ok payload=\"obmm-export-payload-from-exporter\"" \
+      "${node_name} obmm verify exporter write" || return 1
+    assert_log_has "$log_file" "\\[ub_obmm\\] sync: exporter writeback acknowledged" \
       "${node_name} obmm writeback ack" || return 1
     assert_log_has "$log_file" "\\[ub_obmm\\] unimport -> ok mem_id=[0-9]+" \
       "${node_name} obmm unimport" || return 1

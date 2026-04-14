@@ -1,8 +1,8 @@
 /*
- * ub_rdma_demo.c - Dual-node URMA RDMA resource lifecycle demo.
+ * ub_rdma_demo.c - URMA RDMA resource lifecycle demo.
  *
  * Demonstrates the full URMA resource creation and binding pipeline
- * over a simulated UB network between two QEMU VMs (nodeA/nodeB).
+ * over a simulated UB network between two QEMU VMs.
  *
  * Steps:
  *   1. Query device attributes
@@ -132,6 +132,35 @@ struct rdma_resources {
 };
 
 static struct rdma_resources g_res;
+
+enum rdma_role {
+    RDMA_ROLE_UNKNOWN = 0,
+    RDMA_ROLE_INITIATOR,
+    RDMA_ROLE_RESPONDER,
+};
+
+static enum rdma_role parse_rdma_role(const char *role)
+{
+    if (strcmp(role, "initiator") == 0 || strcmp(role, "nodeA") == 0) {
+        return RDMA_ROLE_INITIATOR;
+    }
+    if (strcmp(role, "responder") == 0 || strcmp(role, "nodeB") == 0) {
+        return RDMA_ROLE_RESPONDER;
+    }
+    return RDMA_ROLE_UNKNOWN;
+}
+
+static const char *rdma_role_name(enum rdma_role role)
+{
+    switch (role) {
+    case RDMA_ROLE_INITIATOR:
+        return "initiator";
+    case RDMA_ROLE_RESPONDER:
+        return "responder";
+    default:
+        return "unknown";
+    }
+}
 
 enum udma_sq_opcode_local {
     UDMA_OPC_SEND_LOCAL = 0x0,
@@ -384,7 +413,7 @@ static int rdma_post_send_one(struct rdma_resources *res, const void *buf, uint3
     return 0;
 }
 
-static int sync_datapath_ready(int udp_fd, const char *role,
+static int sync_datapath_ready(int udp_fd, enum rdma_role role,
                                const struct sockaddr_in *peer)
 {
     static const char ready_msg[] = "RDMA_DEMO_READY";
@@ -394,7 +423,7 @@ static int sync_datapath_ready(int udp_fd, const char *role,
     socklen_t from_len = sizeof(from);
     ssize_t n;
 
-    if (strcmp(role, "nodeA") == 0) {
+    if (role == RDMA_ROLE_INITIATOR) {
         if (sendto(udp_fd, ready_msg, sizeof(ready_msg), 0,
                    (const struct sockaddr *)peer, sizeof(*peer)) < 0) {
             return -errno;
@@ -537,12 +566,12 @@ static bool cmdline_get_value(const char *key, char *out, size_t out_len)
 static bool role_default_ipv4_pair(const char *role, char *local, size_t local_len,
                                    char *peer, size_t peer_len)
 {
-    if (strcmp(role, "nodeA") == 0) {
+    if (strcmp(role, "initiator") == 0 || strcmp(role, "nodeA") == 0) {
         snprintf(local, local_len, "%s", "10.0.0.1");
         snprintf(peer, peer_len, "%s", "10.0.0.2");
         return true;
     }
-    if (strcmp(role, "nodeB") == 0) {
+    if (strcmp(role, "responder") == 0 || strcmp(role, "nodeB") == 0) {
         snprintf(local, local_len, "%s", "10.0.0.2");
         snprintf(peer, peer_len, "%s", "10.0.0.1");
         return true;
@@ -1999,13 +2028,13 @@ static int udp_recv_all(int fd, void *buf, size_t len,
     return 0;
 }
 
-static int do_startup_sync(int udp_fd, const char *role,
+static int do_startup_sync(int udp_fd, enum rdma_role role,
                            const struct sockaddr_in *peer_addr)
 {
     long deadline;
     char sync_buf[64];
 
-    if (strcmp(role, "nodeA") == 0) {
+    if (role == RDMA_ROLE_INITIATOR) {
         snprintf(sync_buf, sizeof(sync_buf), "RDMA_SYNC_REQ");
         if (udp_send_all(udp_fd, sync_buf, strlen(sync_buf), peer_addr) < 0) {
             fprintf(stderr, "[ub_rdma] sync: send REQ failed\n");
@@ -2070,12 +2099,12 @@ static int do_startup_sync(int udp_fd, const char *role,
     }
 }
 
-static int exchange_peer_info(int udp_fd, const char *role,
+static int exchange_peer_info(int udp_fd, enum rdma_role role,
                               const struct sockaddr_in *peer_addr,
                               const struct peer_info *local,
                               struct peer_info *remote)
 {
-    if (strcmp(role, "nodeA") == 0) {
+    if (role == RDMA_ROLE_INITIATOR) {
         if (udp_send_all(udp_fd, local, sizeof(*local), peer_addr) < 0) {
             fprintf(stderr, "[ub_rdma] exchange: send local info failed\n");
             return -1;
@@ -2238,6 +2267,7 @@ static void cleanup_resources(struct rdma_resources *res)
 int main(void)
 {
     char role[32] = "unknown";
+    enum rdma_role parsed_role = RDMA_ROLE_UNKNOWN;
     char ifname[IFNAMSIZ] = {0};
     struct in_addr local_addr = {0};
     struct in_addr desired_local = {0};
@@ -2263,7 +2293,12 @@ int main(void)
         fprintf(stderr, "[ub_rdma] fail: no linqu_urma_dp_role in cmdline\n");
         return 1;
     }
-    printf("[ub_rdma] role=%s\n", role);
+    parsed_role = parse_rdma_role(role);
+    if (parsed_role == RDMA_ROLE_UNKNOWN) {
+        fprintf(stderr, "[ub_rdma] fail: unsupported role=%s\n", role);
+        return 1;
+    }
+    printf("[ub_rdma] role=%s\n", rdma_role_name(parsed_role));
 
     if (!resolve_ipv4_pair(role, my_ip, sizeof(my_ip), peer_ip, sizeof(peer_ip))) {
         fprintf(stderr, "[ub_rdma] fail: missing ip config for role '%s'\n", role);
@@ -2795,7 +2830,7 @@ int main(void)
     setsockopt(udp_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
 
     printf("[ub_rdma] step 8: starting sync on port %d\n", SYNC_PORT);
-    if (do_startup_sync(udp_fd, role, &data_addr) < 0) {
+    if (do_startup_sync(udp_fd, parsed_role, &data_addr) < 0) {
         fprintf(stderr, "[ub_rdma] step 8: startup sync failed\n");
         close(udp_fd);
         cleanup_resources(&g_res);
@@ -2858,7 +2893,7 @@ int main(void)
         data_addr.sin_port = htons(RDMA_PORT);
         data_addr.sin_addr = peer_addr;
 
-        if (exchange_peer_info(udp_fd, role, &data_addr,
+        if (exchange_peer_info(udp_fd, parsed_role, &data_addr,
                                &local_info, &remote_info) < 0) {
             fprintf(stderr, "[ub_rdma] step 8: exchange peer info failed\n");
             close(udp_fd);
@@ -2919,8 +2954,8 @@ int main(void)
             struct udma_jfc_cqe_local cqe;
             uint8_t *tx_buf = g_res.seg_buf;
             uint8_t *rx_buf = (uint8_t *)g_res.seg_buf + 2048;
-            const char req_msg[] = "rdma request payload from NodeA";
-            const char reply_msg[] = "rdma reply payload from NodeB";
+            const char req_msg[] = "rdma request payload from initiator";
+            const char reply_msg[] = "rdma reply payload from responder";
             int ret;
 
             memset(rx_buf, 0, RDMA_MAX_PAYLOAD);
@@ -2934,7 +2969,7 @@ int main(void)
             }
             printf("[ub_rdma] step 9.5: post_recv -> ok\n");
 
-            ret = sync_datapath_ready(udp_fd, role, &data_addr);
+            ret = sync_datapath_ready(udp_fd, parsed_role, &data_addr);
             if (ret < 0) {
                 fprintf(stderr, "[ub_rdma] step 9.5: ready sync failed: %d\n", ret);
                 close(udp_fd);
@@ -2944,7 +2979,7 @@ int main(void)
             }
             printf("[ub_rdma] step 9.5: ready_sync -> ok\n");
 
-            if (strcmp(role, "nodeA") == 0) {
+            if (parsed_role == RDMA_ROLE_INITIATOR) {
                 memcpy(tx_buf, req_msg, sizeof(req_msg));
                 ret = rdma_post_send_one(&g_res, tx_buf, sizeof(req_msg));
                 if (ret < 0) {

@@ -29,8 +29,8 @@
 #define EXPORT_REGION_SIZE (2UL * 1024UL * 1024UL)
 #define DEMO_SIZE (256UL * 1024UL)
 #define IMPORT_ALIGN 0x1000UL
-#define DEMO_PAYLOAD_A "obmm-export-payload-from-nodeA"
-#define DEMO_PAYLOAD_B "obmm-import-payload-from-nodeB"
+#define DEMO_PAYLOAD_A "obmm-export-payload-from-exporter"
+#define DEMO_PAYLOAD_B "obmm-import-payload-from-importer"
 #define OBMM_SIM_DEC_PRIV_MAGIC 0x53444950U
 #define OBMM_SIM_DEC_PRIV_VER_1 1
 
@@ -59,6 +59,12 @@ struct mapped_region {
 };
 
 static volatile sig_atomic_t g_alarm_fired;
+
+enum obmm_role {
+    OBMM_ROLE_UNKNOWN = 0,
+    OBMM_ROLE_EXPORTER,
+    OBMM_ROLE_IMPORTER,
+};
 
 static void alarm_handler(int signo)
 {
@@ -120,15 +126,38 @@ static bool cmdline_get_value(const char *key, char *out, size_t out_len)
     return false;
 }
 
+static enum obmm_role parse_obmm_role(const char *role)
+{
+    if (strcmp(role, "exporter") == 0 || strcmp(role, "nodeA") == 0) {
+        return OBMM_ROLE_EXPORTER;
+    }
+    if (strcmp(role, "importer") == 0 || strcmp(role, "nodeB") == 0) {
+        return OBMM_ROLE_IMPORTER;
+    }
+    return OBMM_ROLE_UNKNOWN;
+}
+
+static const char *obmm_role_name(enum obmm_role role)
+{
+    switch (role) {
+    case OBMM_ROLE_EXPORTER:
+        return "exporter";
+    case OBMM_ROLE_IMPORTER:
+        return "importer";
+    default:
+        return "unknown";
+    }
+}
+
 static bool role_default_ipv4_pair(const char *role, char *local, size_t local_len,
                                    char *peer, size_t peer_len)
 {
-    if (strcmp(role, "nodeA") == 0) {
+    if (strcmp(role, "exporter") == 0 || strcmp(role, "nodeA") == 0) {
         snprintf(local, local_len, "%s", "10.0.0.1");
         snprintf(peer, peer_len, "%s", "10.0.0.2");
         return true;
     }
-    if (strcmp(role, "nodeB") == 0) {
+    if (strcmp(role, "importer") == 0 || strcmp(role, "nodeB") == 0) {
         snprintf(local, local_len, "%s", "10.0.0.2");
         snprintf(peer, peer_len, "%s", "10.0.0.1");
         return true;
@@ -661,8 +690,8 @@ static ssize_t recv_msg(int sockfd, void *buf, size_t len, struct sockaddr_in *f
                     (struct sockaddr *)from, &fromlen);
 }
 
-static int run_nodeA(int sockfd, const struct sockaddr_in *peer,
-                     int obmm_fd, uint32_t local_cna)
+static int run_exporter(int sockfd, const struct sockaddr_in *peer,
+                        int obmm_fd, uint32_t local_cna)
 {
     struct obmm_demo_meta meta;
     struct mapped_region region;
@@ -691,7 +720,7 @@ static int run_nodeA(int sockfd, const struct sockaddr_in *peer,
             if (n > 0) {
                 ack[n] = '\0';
                 if (strcmp(ack, "IMPORT_READY") == 0) {
-                    fprintf(stderr, "[ub_obmm] sync: nodeB import ready\n");
+                    fprintf(stderr, "[ub_obmm] sync: importer ready\n");
                     break;
                 }
             }
@@ -725,7 +754,7 @@ static int run_nodeA(int sockfd, const struct sockaddr_in *peer,
         if (n > 0) {
             ack[n] = '\0';
             if (strcmp(ack, "IMPORT_OK") == 0) {
-                fprintf(stderr, "[ub_obmm] sync: nodeB import acknowledged\n");
+                fprintf(stderr, "[ub_obmm] sync: importer acknowledged visibility\n");
                 break;
             }
         }
@@ -739,7 +768,7 @@ static int run_nodeA(int sockfd, const struct sockaddr_in *peer,
         return 1;
     }
 
-    if (wait_for_payload(&region, DEMO_PAYLOAD_B, 5000, "nodeA verify nodeB write") != 0) {
+    if (wait_for_payload(&region, DEMO_PAYLOAD_B, 5000, "exporter verify importer write") != 0) {
         unmap_region_device(&region);
         (void)do_unexport_region(obmm_fd, meta.export_mem_id);
         return 1;
@@ -758,7 +787,7 @@ static int run_nodeA(int sockfd, const struct sockaddr_in *peer,
         if (n > 0) {
             ack[n] = '\0';
             if (strcmp(ack, "UNIMPORT_OK") == 0) {
-                fprintf(stderr, "[ub_obmm] sync: nodeB unimport acknowledged\n");
+                fprintf(stderr, "[ub_obmm] sync: importer unimport acknowledged\n");
                 break;
             }
         }
@@ -781,8 +810,8 @@ static int run_nodeA(int sockfd, const struct sockaddr_in *peer,
     return 0;
 }
 
-static int run_nodeB(int sockfd, const struct sockaddr_in *peer, int obmm_fd,
-                     uint32_t local_cna)
+static int run_importer(int sockfd, const struct sockaddr_in *peer, int obmm_fd,
+                        uint32_t local_cna)
 {
     struct obmm_demo_meta meta;
     struct mapped_region region;
@@ -837,7 +866,7 @@ static int run_nodeB(int sockfd, const struct sockaddr_in *peer, int obmm_fd,
         if (n > 0) {
             ack[n] = '\0';
             if (strcmp(ack, "WRITE_A_DONE") == 0) {
-                fprintf(stderr, "[ub_obmm] sync: nodeA write published\n");
+                fprintf(stderr, "[ub_obmm] sync: exporter write published\n");
                 break;
             }
         }
@@ -851,7 +880,7 @@ static int run_nodeB(int sockfd, const struct sockaddr_in *peer, int obmm_fd,
         return 1;
     }
 
-    if (wait_for_payload(&region, DEMO_PAYLOAD_A, 5000, "nodeB verify nodeA write") != 0) {
+    if (wait_for_payload(&region, DEMO_PAYLOAD_A, 5000, "importer verify exporter write") != 0) {
         unmap_region_device(&region);
         (void)do_unimport_region(obmm_fd, import_mem_id);
         return 1;
@@ -876,7 +905,7 @@ static int run_nodeB(int sockfd, const struct sockaddr_in *peer, int obmm_fd,
         if (n > 0) {
             ack[n] = '\0';
             if (strcmp(ack, "WRITEBACK_OK") == 0) {
-                fprintf(stderr, "[ub_obmm] sync: nodeA writeback acknowledged\n");
+                fprintf(stderr, "[ub_obmm] sync: exporter writeback acknowledged\n");
                 break;
             }
         }
@@ -907,6 +936,7 @@ static int run_nodeB(int sockfd, const struct sockaddr_in *peer, int obmm_fd,
 int main(void)
 {
     char role[32] = "unknown";
+    enum obmm_role parsed_role = OBMM_ROLE_UNKNOWN;
     char ifname[IFNAMSIZ] = {0};
     char my_ip[INET_ADDRSTRLEN] = {0};
     char peer_ip[INET_ADDRSTRLEN] = {0};
@@ -925,6 +955,11 @@ int main(void)
         fprintf(stderr, "[ub_obmm] fail: missing linqu_urma_dp_role in cmdline\n");
         return 1;
     }
+    parsed_role = parse_obmm_role(role);
+    if (parsed_role == OBMM_ROLE_UNKNOWN) {
+        fprintf(stderr, "[ub_obmm] fail: unsupported role=%s\n", role);
+        return 1;
+    }
 
     if (!resolve_ipv4_pair(role, my_ip, sizeof(my_ip), peer_ip, sizeof(peer_ip))) {
         fprintf(stderr, "[ub_obmm] fail: missing ip config for role=%s\n", role);
@@ -937,7 +972,7 @@ int main(void)
     alarm(RUN_TIMEOUT_S);
 
     printf("[ub_obmm] start\n");
-    printf("[ub_obmm] role=%s\n", role);
+    printf("[ub_obmm] role=%s\n", obmm_role_name(parsed_role));
 
     if (!wait_iface_ready(ifname, sizeof(ifname), &ifindex)) {
         fprintf(stderr, "[ub_obmm] fail: ipourma iface not ready\n");
@@ -980,10 +1015,10 @@ int main(void)
         goto out;
     }
 
-    if (strcmp(role, "nodeA") == 0) {
-        rc = run_nodeA(sockfd, &peer_sockaddr, obmm_fd, (uint32_t)local_cna);
+    if (parsed_role == OBMM_ROLE_EXPORTER) {
+        rc = run_exporter(sockfd, &peer_sockaddr, obmm_fd, (uint32_t)local_cna);
     } else {
-        rc = run_nodeB(sockfd, &peer_sockaddr, obmm_fd, (uint32_t)local_cna);
+        rc = run_importer(sockfd, &peer_sockaddr, obmm_fd, (uint32_t)local_cna);
     }
 
 out:
