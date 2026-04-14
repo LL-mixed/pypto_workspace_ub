@@ -378,25 +378,36 @@ Success criteria:
 
 ### obmm
 
+`obmm` now uses the pool-style demo entrypoint even in dual-node mode.
+With `N=2`, the same binary degenerates into a two-slot pool:
+
+- each node exports one region
+- each node imports the peer region
+- each node verifies shared visibility before the round advances
+
 Run on both nodes:
 
 ```sh
 /bin/linqu_ub_obmm_demo
 ```
 
-Recommended order:
-
-- start `nodeA` first so it can perform `export`
-- then start `nodeB` so it can perform `import`
-
 Success criteria:
 
-- `nodeA` completes `export`
-- `nodeB` completes `import`
-- QEMU side reports decoder `MAP`
-- `nodeB` completes `unimport`
-- `nodeA` completes `unexport`
-- QEMU side reports decoder `UNMAP`
+- both nodes complete `export`
+- both nodes complete `import`
+- each node verifies the current owner slot payload
+- each node publishes ACK on its own slot
+- the owner emits `ROUND_COMMIT` only after all ACKs arrive
+- all imports are cleaned up and both exports are unexported
+
+For four-node automated validation, use the dedicated full-pool harness:
+
+```sh
+guest-linux/aarch64/scripts/run_ub_four_node_obmm_pool.sh
+```
+
+That run performs one shared pool bring-up across `nodeA/nodeB/nodeC/nodeD`
+instead of pairwise OBMM checks.
 
 ### run_demo wrapper
 
