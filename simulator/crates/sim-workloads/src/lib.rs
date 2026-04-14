@@ -2,17 +2,19 @@
 
 use std::collections::HashSet;
 
-use sim_config::{ScenarioConfig, WorkloadConfig};
+use sim_config::{DualNodeShmemMailboxWorkloadConfig, ScenarioConfig, WorkloadConfig};
 use sim_core::{
-    BlockHash, CompletionSource, CompletionStatus, HierarchyCoord, IoOpcode, IoSubmitReq,
-    LogicalSystemId, PlLevel, SimError, SimEvent, TaskKey,
+    BlockHash, CompletionSource, CompletionStatus, CopyDirection, CopyRequest, DispatchRequest,
+    FunctionLabel, HierarchyCoord, IoOpcode, IoSubmitReq, LogicalSystemId, MemoryEndpoint,
+    PlLevel, SegmentHandle, SimError, SimEvent, TaskKey,
 };
 use sim_report::{CompletionSourceStats, CompletionStatusStats, EventSummary, WorkloadRunReport};
 use sim_runtime::{
-    InMemoryBlockStore, PromotionPlan, RecursiveRoutePlanner, RoutePlanner, RouteRequest,
-    SimBlockStore,
+    InMemoryBlockStore, LocalRuntimeEngine, PromotionPlan, RecursiveRoutePlanner, RoutePlanner,
+    RouteRequest, SimBlockStore, VecEventSink,
 };
 use sim_services::block::BlockServiceProfile;
+use sim_services::shmem::{ShmemGetReq, ShmemPutReq};
 use sim_services::db::{DbGetReq, DbPutReq};
 use sim_services::dfs::{DfsReadReq, DfsWriteReq};
 use sim_topology::SimTopology;
@@ -34,6 +36,10 @@ pub fn run_minimal_workload(
     config: &ScenarioConfig,
     topology: &SimTopology,
 ) -> Result<WorkloadRunReport, sim_core::SimError> {
+    if let WorkloadConfig::DualNodeShmemMailbox(cfg) = &config.workload {
+        return run_dual_node_shmem_mailbox_workload(config, topology, cfg);
+    }
+
     let mut store = InMemoryBlockStore::from_config(config);
     let planner = RecursiveRoutePlanner::from_config(config);
     let mut seeded_dfs_paths = HashSet::new();
@@ -48,6 +54,7 @@ pub fn run_minimal_workload(
             cfg.unique_prefixes.max(1),
         ),
         WorkloadConfig::TraceReplay(_) => ("trace_replay".to_string(), "default".to_string(), 2, 1, 2),
+        WorkloadConfig::DualNodeShmemMailbox(_) => unreachable!("handled above"),
         WorkloadConfig::RustLlmMvp(cfg) => {
             let profile = rust_llm_profile(&cfg.profile);
             (
@@ -104,61 +111,7 @@ pub fn run_minimal_workload(
     let mut prefix_segment_seeded = false;
     let mut seeded_db_keys = HashSet::new();
 
-    let mut report = WorkloadRunReport {
-        workload_kind,
-        workload_profile,
-        requests_total,
-        blocks_total: 0,
-        hits: 0,
-        misses: 0,
-        prefix_hits: 0,
-        tail_misses: 0,
-        fallback_reads: 0,
-        shmem_puts: 0,
-        shmem_gets: 0,
-        shmem_denied: 0,
-        dfs_cold_reads: 0,
-        dfs_warm_reads: 0,
-        block_read_misses: 0,
-        block_writes: 0,
-        block_writebacks: 0,
-        block_retryable_failures: 0,
-        block_queue_rejections: 0,
-        dfs_seed_writes: 0,
-        db_puts: 0,
-        db_gets: 0,
-        db_retryable_failures: 0,
-        promotions: 0,
-        evictions: 0,
-        completions: 0,
-        summary: EventSummary {
-            total_events: 0,
-            tasks_created: 0,
-            routes_planned: 0,
-            blocks_promoted: 0,
-            blocks_evicted: 0,
-            dispatch_submitted: 0,
-            completions_total: 0,
-            runtime_retried: 0,
-            runtime_failed: 0,
-            faults_injected: 0,
-            completions_by_source: CompletionSourceStats {
-                chip_backend: 0,
-                block_service: 0,
-                shmem_service: 0,
-                dfs_service: 0,
-                db_service: 0,
-                guest_uapi: 0,
-                remote_node: 0,
-            },
-            completions_by_status: CompletionStatusStats {
-                success: 0,
-                retryable_failure: 0,
-                fatal_failure: 0,
-            },
-        },
-        events: Vec::new(),
-    };
+    let mut report = base_workload_report(workload_kind, workload_profile, requests_total);
 
     for request_idx in 0..requests_total {
         let task = TaskKey {
@@ -414,6 +367,203 @@ pub fn run_minimal_workload(
     Ok(report)
 }
 
+fn run_dual_node_shmem_mailbox_workload(
+    config: &ScenarioConfig,
+    topology: &SimTopology,
+    cfg: &DualNodeShmemMailboxWorkloadConfig,
+) -> Result<WorkloadRunReport, SimError> {
+    if topology.hosts.len() < 2 {
+        return Err(SimError::InvalidInput(
+            "dual-node shmem mailbox requires at least 2 hosts",
+        ));
+    }
+    if config.pypto.simpler_boundary.chip_backend_mode == "stub" {
+        return Err(SimError::InvalidInput(
+            "dual-node shmem mailbox requires non-stub chip backend mode",
+        ));
+    }
+
+    let host_a = &topology.hosts[0];
+    let host_b = &topology.hosts[1];
+    let ubpu_b = topology
+        .ubpus
+        .iter()
+        .find(|ubpu| ubpu.host_id == host_b.id)
+        .ok_or(SimError::NotFound("ubpu for host_b"))?;
+
+    let mut surface = LocalGuestUapiSurface::new(topology.clone());
+    let cq = match surface.execute(UapiCommand::RegisterCq { owner: 0 })? {
+        UapiResponse::CqRegistered(cq) => cq,
+        _ => return Err(SimError::InvalidInput("unexpected cq registration response")),
+    };
+
+    let payload_segment = match surface.execute(UapiCommand::CreateSegment {
+        bytes: cfg.payload_bytes,
+    })? {
+        UapiResponse::SegmentCreated(segment) => segment,
+        _ => return Err(SimError::InvalidInput("unexpected payload segment response")),
+    };
+    let result_segment = match surface.execute(UapiCommand::CreateSegment {
+        bytes: cfg.payload_bytes,
+    })? {
+        UapiResponse::SegmentCreated(segment) => segment,
+        _ => return Err(SimError::InvalidInput("unexpected result segment response")),
+    };
+    let ack_segment = match surface.execute(UapiCommand::CreateSegment {
+        bytes: cfg.payload_bytes,
+    })? {
+        UapiResponse::SegmentCreated(segment) => segment,
+        _ => return Err(SimError::InvalidInput("unexpected ack segment response")),
+    };
+
+    let mut runtime = LocalRuntimeEngine::from_config(config);
+    let mut report = base_workload_report(
+        "dual_node_shmem_mailbox".to_string(),
+        "mailbox".to_string(),
+        cfg.rounds,
+    );
+
+    for round in 0..cfg.rounds {
+        let task_a = mailbox_task(round, 0);
+        let task_b = mailbox_task(round, 1);
+
+        report.events.push(SimEvent::TaskCreated {
+            at: round * 10,
+            task: task_a.clone(),
+        });
+        report.events.push(SimEvent::TaskCreated {
+            at: round * 10 + 1,
+            task: task_b.clone(),
+        });
+
+        match surface.execute(UapiCommand::SubmitShmemPut {
+            req: ShmemPutReq {
+                task: Some(task_a.clone()),
+                requester_entity: 0,
+                segment: payload_segment,
+                bytes: cfg.payload_bytes,
+            },
+        })? {
+            UapiResponse::IoSubmitted(_) => report.shmem_puts += 1,
+            _ => return Err(SimError::InvalidInput("unexpected shmem put response")),
+        }
+        drain_and_record(
+            &mut surface,
+            cq,
+            &mut report,
+            "unexpected cq drain response after payload put",
+        )?;
+
+        match surface.execute(UapiCommand::SubmitShmemGet {
+            req: ShmemGetReq {
+                task: Some(task_b.clone()),
+                requester_entity: 1,
+                segment: payload_segment,
+                bytes: cfg.payload_bytes,
+            },
+        })? {
+            UapiResponse::IoSubmitted(_) => report.shmem_gets += 1,
+            _ => return Err(SimError::InvalidInput("unexpected shmem get response")),
+        }
+        drain_and_record(
+            &mut surface,
+            cq,
+            &mut report,
+            "unexpected cq drain response after payload get",
+        )?;
+
+        let stage_segment = SegmentHandle(10_000 + round);
+        let device_result_segment = SegmentHandle(20_000 + round);
+        let mut sink = VecEventSink::default();
+
+        runtime.submit_copy(CopyRequest {
+            task: task_b.clone(),
+            direction: CopyDirection::HostToDevice,
+            bytes: cfg.payload_bytes,
+            src: MemoryEndpoint {
+                node: host_b.node_id,
+                segment: payload_segment,
+                offset: 0,
+            },
+            dst: MemoryEndpoint {
+                node: ubpu_b.node_id,
+                segment: stage_segment,
+                offset: 0,
+            },
+        })?;
+        runtime.submit_dispatch(
+            DispatchRequest {
+                task: task_b.clone(),
+                function: FunctionLabel {
+                    name: "w1_shmem_mailbox_transform".to_string(),
+                    level: PlLevel::L2,
+                },
+                target_level: PlLevel::L2,
+                target_node: ubpu_b.node_id,
+                input_segments: vec![stage_segment],
+            },
+            &mut sink,
+        )?;
+        runtime.submit_copy(CopyRequest {
+            task: task_b.clone(),
+            direction: CopyDirection::DeviceToHost,
+            bytes: cfg.payload_bytes,
+            src: MemoryEndpoint {
+                node: ubpu_b.node_id,
+                segment: device_result_segment,
+                offset: 0,
+            },
+            dst: MemoryEndpoint {
+                node: host_b.node_id,
+                segment: result_segment,
+                offset: 0,
+            },
+        })?;
+        let completions = runtime.poll_completions(runtime.now().saturating_add(256), &mut sink);
+        report.completions += completions.len() as u64;
+        report.events.extend(sink.into_events());
+
+        match surface.execute(UapiCommand::SubmitShmemPut {
+            req: ShmemPutReq {
+                task: Some(task_b.clone()),
+                requester_entity: 1,
+                segment: ack_segment,
+                bytes: cfg.payload_bytes,
+            },
+        })? {
+            UapiResponse::IoSubmitted(_) => report.shmem_puts += 1,
+            _ => return Err(SimError::InvalidInput("unexpected shmem ack put response")),
+        }
+        drain_and_record(
+            &mut surface,
+            cq,
+            &mut report,
+            "unexpected cq drain response after ack put",
+        )?;
+
+        match surface.execute(UapiCommand::SubmitShmemGet {
+            req: ShmemGetReq {
+                task: Some(task_a.clone()),
+                requester_entity: 0,
+                segment: ack_segment,
+                bytes: cfg.payload_bytes,
+            },
+        })? {
+            UapiResponse::IoSubmitted(_) => report.shmem_gets += 1,
+            _ => return Err(SimError::InvalidInput("unexpected shmem ack get response")),
+        }
+        drain_and_record(
+            &mut surface,
+            cq,
+            &mut report,
+            "unexpected cq drain response after ack get",
+        )?;
+    }
+
+    report.summary = summarize_events(&report.events);
+    Ok(report)
+}
+
 fn submit_block_read(
     surface: &mut LocalGuestUapiSurface,
     cq: sim_core::CqHandle,
@@ -623,6 +773,79 @@ fn block_for_request(
             (request_idx + block_idx) % stable_prefixes
         )),
         _ => BlockHash(format!("trace-block-{request_idx}-{block_idx}")),
+    }
+}
+
+fn mailbox_task(round: u64, host_idx: u32) -> TaskKey {
+    let mut levels = [0; 8];
+    levels[3] = host_idx;
+    TaskKey {
+        logical_system: LogicalSystemId(1),
+        coord: HierarchyCoord { levels },
+        scope_depth: 0,
+        task_id: round * 10 + u64::from(host_idx) + 1,
+    }
+}
+
+fn base_workload_report(
+    workload_kind: String,
+    workload_profile: String,
+    requests_total: u64,
+) -> WorkloadRunReport {
+    WorkloadRunReport {
+        workload_kind,
+        workload_profile,
+        requests_total,
+        blocks_total: 0,
+        hits: 0,
+        misses: 0,
+        prefix_hits: 0,
+        tail_misses: 0,
+        fallback_reads: 0,
+        shmem_puts: 0,
+        shmem_gets: 0,
+        shmem_denied: 0,
+        dfs_cold_reads: 0,
+        dfs_warm_reads: 0,
+        block_read_misses: 0,
+        block_writes: 0,
+        block_writebacks: 0,
+        block_retryable_failures: 0,
+        block_queue_rejections: 0,
+        dfs_seed_writes: 0,
+        db_puts: 0,
+        db_gets: 0,
+        db_retryable_failures: 0,
+        promotions: 0,
+        evictions: 0,
+        completions: 0,
+        summary: EventSummary {
+            total_events: 0,
+            tasks_created: 0,
+            routes_planned: 0,
+            blocks_promoted: 0,
+            blocks_evicted: 0,
+            dispatch_submitted: 0,
+            completions_total: 0,
+            runtime_retried: 0,
+            runtime_failed: 0,
+            faults_injected: 0,
+            completions_by_source: CompletionSourceStats {
+                chip_backend: 0,
+                block_service: 0,
+                shmem_service: 0,
+                dfs_service: 0,
+                db_service: 0,
+                guest_uapi: 0,
+                remote_node: 0,
+            },
+            completions_by_status: CompletionStatusStats {
+                success: 0,
+                retryable_failure: 0,
+                fatal_failure: 0,
+            },
+        },
+        events: Vec::new(),
     }
 }
 
