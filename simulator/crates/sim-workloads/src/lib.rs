@@ -95,6 +95,7 @@ pub fn run_minimal_workload(
     } else {
         LocalGuestUapiSurface::new(topology.clone())
     };
+    let mut runtime = LocalRuntimeEngine::from_config(config);
     let cq = match surface.execute(UapiCommand::RegisterCq { owner: 0 })? {
         UapiResponse::CqRegistered(cq) => cq,
         _ => return Err(sim_core::SimError::InvalidInput("unexpected cq registration response")),
@@ -315,6 +316,68 @@ pub fn run_minimal_workload(
             )?;
             if !matches!(rust_profile, Some(profile) if profile.name == "capacity_pressure") {
                 drain_and_record(&mut surface, cq, &mut report, "unexpected cq drain response")?;
+            }
+
+            if report.workload_kind == "rust_llm_server_mvp" {
+                let host_node = topology.hosts[0].node_id;
+                let ubpu_node = topology
+                    .ubpus
+                    .iter()
+                    .find(|ubpu| ubpu.host_id == 0)
+                    .map(|ubpu| ubpu.node_id)
+                    .unwrap_or(host_node);
+                let stage_segment = SegmentHandle(90_000 + report.blocks_total);
+                let device_result_segment = SegmentHandle(100_000 + report.blocks_total);
+                let host_result_segment = SegmentHandle(110_000 + report.blocks_total);
+                let mut sink = VecEventSink::default();
+
+                runtime.submit_copy(CopyRequest {
+                    task: task.clone(),
+                    direction: CopyDirection::HostToDevice,
+                    bytes: 4096,
+                    src: MemoryEndpoint {
+                        node: host_node,
+                        segment: stage_segment,
+                        offset: 0,
+                    },
+                    dst: MemoryEndpoint {
+                        node: ubpu_node,
+                        segment: stage_segment,
+                        offset: 0,
+                    },
+                })?;
+                runtime.submit_dispatch(
+                    DispatchRequest {
+                        task: task.clone(),
+                        function: FunctionLabel {
+                            name: "w4_rust_llm_minimal_step".to_string(),
+                            level: PlLevel::L2,
+                        },
+                        target_level: PlLevel::L2,
+                        target_node: ubpu_node,
+                        input_segments: vec![stage_segment],
+                    },
+                    &mut sink,
+                )?;
+                runtime.submit_copy(CopyRequest {
+                    task: task.clone(),
+                    direction: CopyDirection::DeviceToHost,
+                    bytes: 4096,
+                    src: MemoryEndpoint {
+                        node: ubpu_node,
+                        segment: device_result_segment,
+                        offset: 0,
+                    },
+                    dst: MemoryEndpoint {
+                        node: host_node,
+                        segment: host_result_segment,
+                        offset: 0,
+                    },
+                })?;
+                let completions =
+                    runtime.poll_completions(runtime.now().saturating_add(256), &mut sink);
+                report.completions += completions.len() as u64;
+                report.events.extend(sink.into_events());
             }
         }
 
@@ -1179,6 +1242,15 @@ fn base_workload_report(
 
 fn rust_llm_profile(profile: &str) -> RustLlmProfile {
     match profile {
+        "dual_node_minimal" => RustLlmProfile {
+            name: "dual_node_minimal",
+            requests_total_cap: 2,
+            prefix_groups: 1,
+            prefix_blocks: 1,
+            tail_blocks: 1,
+            tail_uses_dfs: false,
+            evict_after_request: 0,
+        },
         "high_reuse" => RustLlmProfile {
             name: "high_reuse",
             requests_total_cap: 6,
