@@ -55,6 +55,7 @@
 3. 当前 `M1` 的唯一最小 workload 已冻结为 `host_build_graph/vector_example`。
 4. 当前 `M2` 和 `M3` 已有规则性文档，可用于接口与时序收口。
 5. 当前文档体系已经可用于多人并行实施。
+6. 双节点 workload 推荐按 `W1 -> W2 -> W3 -> W4` 路线推进。
 
 ---
 
@@ -76,6 +77,8 @@
    - [simpler_integration_m5_validation_matrix_template.md](/Volumes/repos/pypto_workspace/simulator/docs/simpler_integration_m5_validation_matrix_template.md)
 7. 阶段结果记录模板
    - [simpler_integration_phase_result_record_template.md](/Volumes/repos/pypto_workspace/simulator/docs/simpler_integration_phase_result_record_template.md)
+8. 双节点 MVP workload 路线图
+   - [simpler_dual_node_mvp_workload_roadmap.md](/Volumes/repos/pypto_workspace/simulator/docs/simpler_dual_node_mvp_workload_roadmap.md)
 
 ---
 
@@ -176,13 +179,15 @@
 执行依据：
 
 1. [simpler_integration_milestone_execution_plan.md](/Volumes/repos/pypto_workspace/simulator/docs/simpler_integration_milestone_execution_plan.md)
-2. 视所选主线补充引用相关结果记录和后续决策文档
+2. [simpler_dual_node_mvp_workload_roadmap.md](/Volumes/repos/pypto_workspace/simulator/docs/simpler_dual_node_mvp_workload_roadmap.md)
+3. 视所选主线补充引用相关结果记录和后续决策文档
 
 本阶段关注点：
 
 1. 节点集成形态决策
 2. guest 预案或落地
 3. 与当前 UB/QEMU 平台的深度对齐
+4. 双节点 workload 按 `W1 -> W2 -> W3 -> W4` 顺序推进
 
 ---
 
@@ -244,6 +249,14 @@
 1. 本页
 2. [simpler_integration_m5_validation_matrix_template.md](/Volumes/repos/pypto_workspace/simulator/docs/simpler_integration_m5_validation_matrix_template.md)
 3. [simpler_integration_phase_result_record_template.md](/Volumes/repos/pypto_workspace/simulator/docs/simpler_integration_phase_result_record_template.md)
+
+### 情况 F：我要做双节点 workload 路线推进
+
+先看：
+
+1. 本页
+2. [simpler_dual_node_mvp_workload_roadmap.md](/Volumes/repos/pypto_workspace/simulator/docs/simpler_dual_node_mvp_workload_roadmap.md)
+3. 当前阶段对应的实施文档
 
 ---
 
