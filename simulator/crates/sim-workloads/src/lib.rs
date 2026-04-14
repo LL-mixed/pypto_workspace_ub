@@ -219,6 +219,15 @@ pub fn run_minimal_workload(
                         )?;
                     }
                 }
+                if report.workload_kind == "rust_llm_server_mvp" {
+                    run_chip_backend_minimal_step(
+                        &mut runtime,
+                        topology,
+                        &task,
+                        report,
+                        "w4_rust_llm_minimal_step",
+                    )?;
+                }
                 continue;
             }
 
@@ -319,65 +328,13 @@ pub fn run_minimal_workload(
             }
 
             if report.workload_kind == "rust_llm_server_mvp" {
-                let host_node = topology.hosts[0].node_id;
-                let ubpu_node = topology
-                    .ubpus
-                    .iter()
-                    .find(|ubpu| ubpu.host_id == 0)
-                    .map(|ubpu| ubpu.node_id)
-                    .unwrap_or(host_node);
-                let stage_segment = SegmentHandle(90_000 + report.blocks_total);
-                let device_result_segment = SegmentHandle(100_000 + report.blocks_total);
-                let host_result_segment = SegmentHandle(110_000 + report.blocks_total);
-                let mut sink = VecEventSink::default();
-
-                runtime.submit_copy(CopyRequest {
-                    task: task.clone(),
-                    direction: CopyDirection::HostToDevice,
-                    bytes: 4096,
-                    src: MemoryEndpoint {
-                        node: host_node,
-                        segment: stage_segment,
-                        offset: 0,
-                    },
-                    dst: MemoryEndpoint {
-                        node: ubpu_node,
-                        segment: stage_segment,
-                        offset: 0,
-                    },
-                })?;
-                runtime.submit_dispatch(
-                    DispatchRequest {
-                        task: task.clone(),
-                        function: FunctionLabel {
-                            name: "w4_rust_llm_minimal_step".to_string(),
-                            level: PlLevel::L2,
-                        },
-                        target_level: PlLevel::L2,
-                        target_node: ubpu_node,
-                        input_segments: vec![stage_segment],
-                    },
-                    &mut sink,
+                run_chip_backend_minimal_step(
+                    &mut runtime,
+                    topology,
+                    &task,
+                    &mut report,
+                    "w4_rust_llm_minimal_step",
                 )?;
-                runtime.submit_copy(CopyRequest {
-                    task: task.clone(),
-                    direction: CopyDirection::DeviceToHost,
-                    bytes: 4096,
-                    src: MemoryEndpoint {
-                        node: ubpu_node,
-                        segment: device_result_segment,
-                        offset: 0,
-                    },
-                    dst: MemoryEndpoint {
-                        node: host_node,
-                        segment: host_result_segment,
-                        offset: 0,
-                    },
-                })?;
-                let completions =
-                    runtime.poll_completions(runtime.now().saturating_add(256), &mut sink);
-                report.completions += completions.len() as u64;
-                report.events.extend(sink.into_events());
             }
         }
 
@@ -1176,6 +1133,75 @@ fn mailbox_task(round: u64, host_idx: u32) -> TaskKey {
         scope_depth: 0,
         task_id: round * 10 + u64::from(host_idx) + 1,
     }
+}
+
+fn run_chip_backend_minimal_step(
+    runtime: &mut LocalRuntimeEngine,
+    topology: &SimTopology,
+    task: &TaskKey,
+    report: &mut WorkloadRunReport,
+    function_name: &str,
+) -> Result<(), SimError> {
+    let host_node = topology.hosts[0].node_id;
+    let ubpu_node = topology
+        .ubpus
+        .iter()
+        .find(|ubpu| ubpu.host_id == 0)
+        .map(|ubpu| ubpu.node_id)
+        .unwrap_or(host_node);
+    let segment_seed = 90_000 + report.blocks_total * 10 + task.task_id;
+    let stage_segment = SegmentHandle(segment_seed);
+    let device_result_segment = SegmentHandle(segment_seed + 1);
+    let host_result_segment = SegmentHandle(segment_seed + 2);
+    let mut sink = VecEventSink::default();
+
+    runtime.submit_copy(CopyRequest {
+        task: task.clone(),
+        direction: CopyDirection::HostToDevice,
+        bytes: 4096,
+        src: MemoryEndpoint {
+            node: host_node,
+            segment: stage_segment,
+            offset: 0,
+        },
+        dst: MemoryEndpoint {
+            node: ubpu_node,
+            segment: stage_segment,
+            offset: 0,
+        },
+    })?;
+    runtime.submit_dispatch(
+        DispatchRequest {
+            task: task.clone(),
+            function: FunctionLabel {
+                name: function_name.to_string(),
+                level: PlLevel::L2,
+            },
+            target_level: PlLevel::L2,
+            target_node: ubpu_node,
+            input_segments: vec![stage_segment],
+        },
+        &mut sink,
+    )?;
+    runtime.submit_copy(CopyRequest {
+        task: task.clone(),
+        direction: CopyDirection::DeviceToHost,
+        bytes: 4096,
+        src: MemoryEndpoint {
+            node: ubpu_node,
+            segment: device_result_segment,
+            offset: 0,
+        },
+        dst: MemoryEndpoint {
+            node: host_node,
+            segment: host_result_segment,
+            offset: 0,
+        },
+    })?;
+    let completions = runtime.poll_completions(runtime.now().saturating_add(256), &mut sink);
+    report.completions += completions.len() as u64;
+    report.events.extend(sink.into_events());
+    Ok(())
 }
 
 fn base_workload_report(
