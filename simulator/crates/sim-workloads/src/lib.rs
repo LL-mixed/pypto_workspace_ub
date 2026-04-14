@@ -2,7 +2,10 @@
 
 use std::collections::HashSet;
 
-use sim_config::{DualNodeShmemMailboxWorkloadConfig, ScenarioConfig, WorkloadConfig};
+use sim_config::{
+    DualNodeBlockComputeWorkloadConfig, DualNodeShmemMailboxWorkloadConfig, ScenarioConfig,
+    WorkloadConfig,
+};
 use sim_core::{
     BlockHash, CompletionSource, CompletionStatus, CopyDirection, CopyRequest, DispatchRequest,
     FunctionLabel, HierarchyCoord, IoOpcode, IoSubmitReq, LogicalSystemId, MemoryEndpoint,
@@ -39,6 +42,9 @@ pub fn run_minimal_workload(
     if let WorkloadConfig::DualNodeShmemMailbox(cfg) = &config.workload {
         return run_dual_node_shmem_mailbox_workload(config, topology, cfg);
     }
+    if let WorkloadConfig::DualNodeBlockCompute(cfg) = &config.workload {
+        return run_dual_node_block_compute_workload(config, topology, cfg);
+    }
 
     let mut store = InMemoryBlockStore::from_config(config);
     let planner = RecursiveRoutePlanner::from_config(config);
@@ -55,6 +61,7 @@ pub fn run_minimal_workload(
         ),
         WorkloadConfig::TraceReplay(_) => ("trace_replay".to_string(), "default".to_string(), 2, 1, 2),
         WorkloadConfig::DualNodeShmemMailbox(_) => unreachable!("handled above"),
+        WorkloadConfig::DualNodeBlockCompute(_) => unreachable!("handled above"),
         WorkloadConfig::RustLlmMvp(cfg) => {
             let profile = rust_llm_profile(&cfg.profile);
             (
@@ -557,6 +564,160 @@ fn run_dual_node_shmem_mailbox_workload(
             cq,
             &mut report,
             "unexpected cq drain response after ack get",
+        )?;
+    }
+
+    report.summary = summarize_events(&report.events);
+    Ok(report)
+}
+
+fn run_dual_node_block_compute_workload(
+    config: &ScenarioConfig,
+    topology: &SimTopology,
+    cfg: &DualNodeBlockComputeWorkloadConfig,
+) -> Result<WorkloadRunReport, SimError> {
+    if topology.hosts.len() < 2 {
+        return Err(SimError::InvalidInput(
+            "dual-node block compute requires at least 2 hosts",
+        ));
+    }
+    if config.pypto.simpler_boundary.chip_backend_mode == "stub" {
+        return Err(SimError::InvalidInput(
+            "dual-node block compute requires non-stub chip backend mode",
+        ));
+    }
+
+    let host_a = &topology.hosts[0];
+    let ubpu_a = topology
+        .ubpus
+        .iter()
+        .find(|ubpu| ubpu.host_id == host_a.id)
+        .ok_or(SimError::NotFound("ubpu for host_a"))?;
+
+    let mut surface = LocalGuestUapiSurface::new(topology.clone());
+    let cq = match surface.execute(UapiCommand::RegisterCq { owner: 0 })? {
+        UapiResponse::CqRegistered(cq) => cq,
+        _ => return Err(SimError::InvalidInput("unexpected cq registration response")),
+    };
+
+    let mut runtime = LocalRuntimeEngine::from_config(config);
+    let mut report = base_workload_report(
+        "dual_node_block_compute".to_string(),
+        "read_compute_write".to_string(),
+        cfg.rounds,
+    );
+
+    for round in 0..cfg.rounds {
+        let task_a = mailbox_task(round, 0);
+        let task_b = mailbox_task(round, 1);
+        let source_block = BlockHash(format!("w2-source-block-{round}"));
+        let result_block = BlockHash(format!("w2-result-block-{round}"));
+
+        report.blocks_total += 1;
+        report.events.push(SimEvent::TaskCreated {
+            at: round * 10,
+            task: task_a.clone(),
+        });
+        report.events.push(SimEvent::TaskCreated {
+            at: round * 10 + 1,
+            task: task_b.clone(),
+        });
+
+        submit_block_write(
+            &mut surface,
+            cq,
+            &mut report,
+            task_b.clone(),
+            source_block.clone(),
+            false,
+        )?;
+        drain_and_record(
+            &mut surface,
+            cq,
+            &mut report,
+            "unexpected cq drain response after block seed write",
+        )?;
+
+        submit_block_read(
+            &mut surface,
+            cq,
+            &mut report,
+            task_a.clone(),
+            source_block,
+            false,
+        )?;
+        drain_and_record(
+            &mut surface,
+            cq,
+            &mut report,
+            "unexpected cq drain response after block read",
+        )?;
+
+        let stage_segment = SegmentHandle(30_000 + round);
+        let device_result_segment = SegmentHandle(40_000 + round);
+        let host_result_segment = SegmentHandle(50_000 + round);
+        let mut sink = VecEventSink::default();
+
+        runtime.submit_copy(CopyRequest {
+            task: task_a.clone(),
+            direction: CopyDirection::HostToDevice,
+            bytes: 4096,
+            src: MemoryEndpoint {
+                node: host_a.node_id,
+                segment: stage_segment,
+                offset: 0,
+            },
+            dst: MemoryEndpoint {
+                node: ubpu_a.node_id,
+                segment: stage_segment,
+                offset: 0,
+            },
+        })?;
+        runtime.submit_dispatch(
+            DispatchRequest {
+                task: task_a.clone(),
+                function: FunctionLabel {
+                    name: "w2_block_transform".to_string(),
+                    level: PlLevel::L2,
+                },
+                target_level: PlLevel::L2,
+                target_node: ubpu_a.node_id,
+                input_segments: vec![stage_segment],
+            },
+            &mut sink,
+        )?;
+        runtime.submit_copy(CopyRequest {
+            task: task_a.clone(),
+            direction: CopyDirection::DeviceToHost,
+            bytes: 4096,
+            src: MemoryEndpoint {
+                node: ubpu_a.node_id,
+                segment: device_result_segment,
+                offset: 0,
+            },
+            dst: MemoryEndpoint {
+                node: host_a.node_id,
+                segment: host_result_segment,
+                offset: 0,
+            },
+        })?;
+        let completions = runtime.poll_completions(runtime.now().saturating_add(256), &mut sink);
+        report.completions += completions.len() as u64;
+        report.events.extend(sink.into_events());
+
+        submit_block_write(
+            &mut surface,
+            cq,
+            &mut report,
+            task_a.clone(),
+            result_block,
+            false,
+        )?;
+        drain_and_record(
+            &mut surface,
+            cq,
+            &mut report,
+            "unexpected cq drain response after result block write",
         )?;
     }
 
