@@ -76,6 +76,7 @@ impl ScenarioConfig {
             WorkloadConfig::TraceReplay(cfg) => cfg.validate()?,
             WorkloadConfig::DualNodeShmemMailbox(cfg) => cfg.validate()?,
             WorkloadConfig::DualNodeBlockCompute(cfg) => cfg.validate()?,
+            WorkloadConfig::DualNodeCacheFill(cfg) => cfg.validate()?,
             WorkloadConfig::RustLlmMvp(cfg) => cfg.validate()?,
         }
 
@@ -343,6 +344,20 @@ impl DualNodeBlockComputeWorkloadConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DualNodeCacheFillWorkloadConfig {
+    pub rounds: u64,
+}
+
+impl DualNodeCacheFillWorkloadConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.rounds == 0 {
+            return Err(ConfigError::NonPositive("workload.rounds"));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RustLlmMvpWorkloadConfig {
     pub profile: String,
     pub qps: u64,
@@ -380,6 +395,8 @@ pub enum WorkloadConfig {
     DualNodeShmemMailbox(DualNodeShmemMailboxWorkloadConfig),
     #[serde(rename = "dual_node_block_compute")]
     DualNodeBlockCompute(DualNodeBlockComputeWorkloadConfig),
+    #[serde(rename = "dual_node_cache_fill")]
+    DualNodeCacheFill(DualNodeCacheFillWorkloadConfig),
     #[serde(rename = "rust_llm_server_mvp")]
     RustLlmMvp(RustLlmMvpWorkloadConfig),
 }
