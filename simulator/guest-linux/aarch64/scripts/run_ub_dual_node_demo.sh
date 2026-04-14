@@ -134,10 +134,10 @@ validate_chat_log() {
   assert_log_absent "$log_file" "\\[ub_chat\\] fail" "${node_name} chat fail" || return 1
   assert_log_has "$log_file" "\\[ub_chat\\] summary tx=5 rx=5" "${node_name} chat tx/rx summary" || return 1
   if [[ "$node_name" == "nodeA" ]]; then
-    assert_log_has "$log_file" "\\[CHAT\\] nodeA seq=[0-9]+ \"copy, greeting back from NodeB\"" \
+    assert_log_has "$log_file" "\\[CHAT\\] initiator seq=[0-9]+ \"copy, greeting back from responder\"" \
       "${node_name} chat reply payload" || return 1
   else
-    assert_log_has "$log_file" "\\[CHAT\\] nodeB seq=[0-9]+ \"greeting from NodeA\"" \
+    assert_log_has "$log_file" "\\[CHAT\\] responder seq=[0-9]+ \"greeting from initiator\"" \
       "${node_name} chat request payload" || return 1
   fi
 }
