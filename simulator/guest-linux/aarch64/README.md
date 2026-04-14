@@ -31,8 +31,11 @@ environment variables:
   - optional path to a static ARM64 busybox binary
   - if provided, the initramfs becomes a small userspace image with a shell
   - `run_demo` is copied to `/bin/run_demo` and can be used as `rdinit`
-  - if not provided, `scripts/build_initramfs.sh` falls back to local
-    `simulator/guest-linux/aarch64/busybox-aarch64` when present
+  - if not provided, `scripts/build_initramfs.sh` first reuses local
+    `guest-linux/aarch64/busybox-aarch64` when present
+  - if no local binary exists, `scripts/build_initramfs.sh` will try to build
+    one from `guest-linux/aarch64/third_party/busybox-src` or a local
+    `guest-linux/aarch64/third_party/busybox-*.tar.bz2`
 
 ## Files
 
@@ -66,8 +69,8 @@ export KERNEL_IMAGE=/path/to/Image
 export AARCH64_LINUX_CC=aarch64-linux-gnu-gcc
 export BUSYBOX=/path/to/busybox-aarch64
 
-simulator/guest-linux/aarch64/scripts/build_initramfs.sh
-simulator/guest-linux/aarch64/scripts/run_linux_probe.sh
+guest-linux/aarch64/scripts/build_initramfs.sh
+guest-linux/aarch64/scripts/run_linux_probe.sh
 ```
 
 ## Build busybox on Linux VM (if needed)
@@ -78,7 +81,7 @@ ready-made ARM64 busybox binary, you have two options:
 Preferred entry:
 
 ```sh
-cd simulator/guest-linux/aarch64
+cd guest-linux/aarch64
 AARCH64_LINUX_CC=aarch64-linux-gnu-gcc ./scripts/prepare_busybox.sh
 ```
 
@@ -94,7 +97,7 @@ AARCH64_LINUX_CC=aarch64-linux-gnu-gcc ./scripts/prepare_busybox.sh
 ### Option 1: Build locally (recommended if SSH is unavailable)
 
 ```sh
-cd simulator/guest-linux/aarch64/third_party
+cd guest-linux/aarch64/third_party
 curl -L https://busybox.net/downloads/busybox-1.36.1.tar.bz2 -o busybox-1.36.1.tar.bz2
 tar -xf busybox-1.36.1.tar.bz2
 cd busybox-1.36.1
@@ -119,7 +122,9 @@ chmod +x ./busybox-aarch64
 export BUSYBOX=$PWD/busybox-aarch64
 ```
 
-Then rebuild the initramfs (`build_initramfs.sh`).
+Then rebuild the initramfs (`build_initramfs.sh`). If you keep the tarball or
+source tree under `guest-linux/aarch64/third_party`, the script can also build
+and cache `busybox-aarch64` automatically.
 
 Inside guest, you can run:
 
@@ -147,19 +152,19 @@ Example:
 
 ```sh
 # 1) Build in VM and pull Image + hisi_ubus.ko + udma.ko (+linqu_ub_drv.ko if available)
-simulator/guest-linux/aarch64/scripts/sync_ub_kernel_artifacts_from_vm.sh
+guest-linux/aarch64/scripts/sync_ub_kernel_artifacts_from_vm.sh
 
 # 2) Build guest initramfs
 export AARCH64_LINUX_CC=aarch64-linux-gnu-gcc
 export BUSYBOX=/path/to/busybox-aarch64
-export HISI_UBUS_GUEST_MODULE=/Volumes/repos/pypto_workspace/simulator/guest-linux/aarch64/out/modules/hisi_ubus.ko
-export UB_UDMA_GUEST_MODULE=/Volumes/repos/pypto_workspace/simulator/guest-linux/aarch64/out/modules/udma.ko
-export LINQU_UB_GUEST_MODULE=/Volumes/repos/pypto_workspace/simulator/guest-linux/aarch64/out/modules/linqu_ub_drv.ko
-simulator/guest-linux/aarch64/scripts/build_initramfs.sh
+export HISI_UBUS_GUEST_MODULE=$PWD/guest-linux/aarch64/out/modules/hisi_ubus.ko
+export UB_UDMA_GUEST_MODULE=$PWD/guest-linux/aarch64/out/modules/udma.ko
+export LINQU_UB_GUEST_MODULE=$PWD/guest-linux/aarch64/out/modules/linqu_ub_drv.ko
+guest-linux/aarch64/scripts/build_initramfs.sh
 
 # 3) Run minimal ubcore/urma end-to-end send/recv
 export RDINIT=/bin/run_demo
-simulator/guest-linux/aarch64/scripts/run_ub_dual_node_ubcore_urma_e2e.sh
+guest-linux/aarch64/scripts/run_ub_dual_node_ubcore_urma_e2e.sh
 ```
 
 `RDINIT` is also optional override; by default the dual-node scripts use
@@ -179,8 +184,7 @@ shell instead of auto-running the demo harness.
 Example:
 
 ```sh
-cd simulator/guest-linux/aarch64
-./scripts/launch_ub_dual_node_tmux.sh
+guest-linux/aarch64/scripts/launch_ub_dual_node_tmux.sh
 ```
 
 Default behavior:
@@ -207,23 +211,159 @@ Useful overrides:
 
 ```sh
 # custom session name
-TMUX_SESSION_NAME=ub-dev ./scripts/launch_ub_dual_node_tmux.sh
+TMUX_SESSION_NAME=ub-dev guest-linux/aarch64/scripts/launch_ub_dual_node_tmux.sh
 
 # boot guest directly into run_demo instead of shell
 RDINIT=/bin/run_demo \
-APPEND_EXTRA="linqu_probe_skip=1 linqu_probe_load_helper=1 linqu_ub_chat=1 linqu_ub_rpc_demo=1" \
-./scripts/launch_ub_dual_node_tmux.sh
+APPEND_EXTRA="linqu_probe_skip=1 linqu_probe_load_helper=1 linqu_ub_chat=1 linqu_ub_rpc_demo=1 linqu_ub_tcp_each_server_demo=1" \
+guest-linux/aarch64/scripts/launch_ub_dual_node_tmux.sh
 
 # force legacy /init dispatch into probe mode
 RDINIT=/init \
 APPEND_EXTRA="linqu_init_action=probe" \
-./scripts/launch_ub_dual_node_tmux.sh
+guest-linux/aarch64/scripts/launch_ub_dual_node_tmux.sh
 ```
 
 Cleanup:
 
 - the launcher prints a per-run cleanup script under `out/`
 - running that script stops both QEMU processes and removes the QMP sockets
+
+## Manual Demo Order In tmux
+
+After `guest-linux/aarch64/scripts/launch_ub_dual_node_tmux.sh` boots both guests
+into interactive shells, `run_demo` bootstrap has already completed. Use these windows:
+
+- `3:nodeA-guest`
+- `4:nodeB-guest`
+
+Recommended rule:
+
+- start the passive / server side on `nodeB` first
+- then start the active / client side on `nodeA`
+
+Useful pre-checks in each guest:
+
+```sh
+mount | head
+ls /sys/bus/ub/devices
+ls /sys/class/net
+ls /dev/uburma
+```
+
+Expected minimum signs:
+
+- `/sys/bus/ub/devices/00001`
+- `ipourma0` under `/sys/class/net`
+- `/dev/uburma` for `rdma`
+
+IPv4 bootstrap:
+
+- `linqu_init` now configures `ipourma0` during bootstrap instead of leaving IPv4 setup to each demo.
+- Preferred cmdline knobs are `linqu_ipourma_ipv4=<local>` and `linqu_ipourma_peer_ipv4=<peer>`.
+- If those are omitted, `linqu_urma_dp_role=nodeA|nodeB` still falls back to `10.0.0.1/10.0.0.2`.
+
+### chat
+
+Run on `nodeB` first, then `nodeA`:
+
+```sh
+/bin/linqu_ub_chat
+```
+
+Success criteria:
+
+- `nodeA` sends the greeting payload
+- `nodeB` receives the expected payload and replies
+- `nodeA` receives the reply payload intact
+
+### rpc
+
+Run on `nodeB` first, then `nodeA`:
+
+```sh
+/bin/linqu_ub_rpc
+```
+
+Success criteria:
+
+- `nodeA` sends the RPC request buffer
+- `nodeB` computes the expected result
+- `nodeA` receives the returned result and validates it
+
+### tcp each-server
+
+Run on both nodes:
+
+```sh
+/bin/linqu_ub_tcp_each_server
+```
+
+Recommended order:
+
+- start `nodeA` and `nodeB` within the same timeout window
+- order does not matter because each node both `listen`s and `connect`s
+
+Success criteria:
+
+- each node's client connects to the peer server
+- each node's server accepts the peer client connection
+- each node's server receives the peer request payload and returns an ACK
+- each node's client receives the peer ACK intact
+
+### rdma
+
+Run on `nodeB` first, then `nodeA`:
+
+```sh
+/bin/linqu_ub_rdma_demo
+```
+
+Success criteria:
+
+- `nodeA` sends the request payload over the URMA/UDMA path
+- `nodeB` receives the request payload intact
+- `nodeB` sends the reply payload back
+- `nodeA` receives the reply payload intact
+
+### obmm
+
+Run on both nodes:
+
+```sh
+/bin/linqu_ub_obmm_demo
+```
+
+Recommended order:
+
+- start `nodeA` first so it can perform `export`
+- then start `nodeB` so it can perform `import`
+
+Success criteria:
+
+- `nodeA` completes `export`
+- `nodeB` completes `import`
+- QEMU side reports decoder `MAP`
+- `nodeB` completes `unimport`
+- `nodeA` completes `unexport`
+- QEMU side reports decoder `UNMAP`
+
+### run_demo wrapper
+
+Instead of calling the binaries directly, you can also use:
+
+```sh
+/bin/run_demo chat
+/bin/run_demo rpc
+/bin/run_demo tcp
+/bin/run_demo rdma
+/bin/run_demo obmm
+/bin/run_demo all
+```
+
+`run_demo all` is less precise for interactive debugging.
+For bring-up and issue isolation, prefer invoking the single demo binaries in
+the order listed above.
 
 ## Initramfs Entry Model
 
@@ -246,9 +386,3 @@ Recommended usage:
 - automated validation: `rdinit=/bin/run_demo`
 - interactive shell bring-up: `rdinit=/bin/run_demo`
 - legacy probe-only path: `rdinit=/init linqu_init_action=probe`
-
-IPv4 bootstrap:
-
-- `linqu_init` now configures `ipourma0` during bootstrap instead of leaving IPv4 setup to each demo.
-- Preferred cmdline knobs are `linqu_ipourma_ipv4=<local>` and `linqu_ipourma_peer_ipv4=<peer>`.
-- If those are omitted, `linqu_urma_dp_role=nodeA|nodeB` still falls back to `10.0.0.1/10.0.0.2`.
