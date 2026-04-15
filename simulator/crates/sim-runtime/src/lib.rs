@@ -371,6 +371,7 @@ struct SimplerProcessRunner {
 
 #[derive(Debug, Clone)]
 struct SimplerDispatchManifest {
+    version: u32,
     op_id: OpId,
     task: String,
     function_name: Option<String>,
@@ -437,6 +438,7 @@ fn simpler_dispatch_manifest(
     backend_spec: Option<&DispatchBackendSpec>,
 ) -> SimplerDispatchManifest {
     SimplerDispatchManifest {
+        version: 1,
         op_id,
         task: op.task.task_id.clone(),
         function_name: op.function_name.clone(),
@@ -459,6 +461,9 @@ fn write_simpler_dispatch_manifest(
 ) -> Result<PathBuf, String> {
     let path = std::env::temp_dir().join(format!("simpler-dispatch-{op_id}.env"));
     let mut content = String::new();
+    content.push_str("MANIFEST_VERSION=");
+    content.push_str(&manifest.version.to_string());
+    content.push('\n');
     content.push_str("OP_ID=");
     content.push_str(&manifest.op_id.to_string());
     content.push('\n');

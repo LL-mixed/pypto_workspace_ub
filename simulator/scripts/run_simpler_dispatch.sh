@@ -5,6 +5,7 @@ python_bin="${SIMPLER_PYTHON:-python3}"
 repo_root="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
 simpler_root="${SIMPLER_PROJECT_ROOT:-$repo_root/modules/simpler}"
 
+manifest_version=""
 op_id=""
 task_id=""
 function_name=""
@@ -20,14 +21,17 @@ manifest=""
 resolve_runner_spec() {
     case "${profile}:${runtime_variant}" in
         "tmrb_vector:tensormap_and_ringbuffer")
+            runner_id="tmrb_vector_example"
             kernels="examples/a2a3/tensormap_and_ringbuffer/vector_example/kernels"
             golden="examples/a2a3/tensormap_and_ringbuffer/vector_example/golden.py"
             ;;
         "host_matmul:host_build_graph")
+            runner_id="host_matmul_example"
             kernels="examples/a2a3/host_build_graph/matmul/kernels"
             golden="examples/a2a3/host_build_graph/matmul/golden.py"
             ;;
         "host_vector:host_build_graph"|":")
+            runner_id="host_vector_example"
             kernels="examples/a2a3/host_build_graph/vector_example/kernels"
             golden="examples/a2a3/host_build_graph/vector_example/golden.py"
             ;;
@@ -70,6 +74,7 @@ done
 if [ -n "$manifest" ]; then
     while IFS='=' read -r key value; do
         case "$key" in
+            MANIFEST_VERSION) manifest_version="$value" ;;
             PROFILE) profile="$value" ;;
             OP_ID) op_id="$value" ;;
             TASK_ID) task_id="$value" ;;
@@ -89,6 +94,11 @@ if [ -n "$manifest" ]; then
     done < "$manifest"
 fi
 
+if [ -n "$manifest_version" ] && [ "$manifest_version" != "1" ]; then
+    echo "unsupported manifest version: $manifest_version" >&2
+    exit 2
+fi
+
 resolve_runner_spec
 
 if [ -z "$platform" ] || [ -z "$kernels" ] || [ -z "$golden" ]; then
@@ -106,6 +116,9 @@ SIMPLER_DISPATCH_INPUT_SEGMENT_COUNT="$input_segment_count" \
 SIMPLER_DISPATCH_PROFILE="$profile" \
 SIMPLER_RUNTIME_VARIANT="$runtime_variant" \
 SIMPLER_CALLABLE_HINT="$callable_hint" \
+SIMPLER_DISPATCH_RUNNER_ID="$runner_id" \
+SIMPLER_DISPATCH_KERNELS="$kernels" \
+SIMPLER_DISPATCH_GOLDEN="$golden" \
 exec "$python_bin" examples/scripts/run_example.py \
     -k "$kernels" \
     -g "$golden" \
