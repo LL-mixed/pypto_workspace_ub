@@ -15,9 +15,28 @@ profile=""
 platform=""
 runtime_variant=""
 callable_hint=""
-kernels=""
-golden=""
 manifest=""
+
+resolve_runner_spec() {
+    case "${profile}:${runtime_variant}" in
+        "tmrb_vector:tensormap_and_ringbuffer")
+            kernels="examples/a2a3/tensormap_and_ringbuffer/vector_example/kernels"
+            golden="examples/a2a3/tensormap_and_ringbuffer/vector_example/golden.py"
+            ;;
+        "host_matmul:host_build_graph")
+            kernels="examples/a2a3/host_build_graph/matmul/kernels"
+            golden="examples/a2a3/host_build_graph/matmul/golden.py"
+            ;;
+        "host_vector:host_build_graph"|":")
+            kernels="examples/a2a3/host_build_graph/vector_example/kernels"
+            golden="examples/a2a3/host_build_graph/vector_example/golden.py"
+            ;;
+        *)
+            echo "unsupported simpler runner spec: profile=${profile} runtime_variant=${runtime_variant}" >&2
+            exit 2
+            ;;
+    esac
+}
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -41,14 +60,6 @@ while [ "$#" -gt 0 ]; do
             callable_hint="$2"
             shift 2
             ;;
-        --kernels)
-            kernels="$2"
-            shift 2
-            ;;
-        --golden)
-            golden="$2"
-            shift 2
-            ;;
         *)
             echo "unknown argument: $1" >&2
             exit 2
@@ -69,8 +80,6 @@ if [ -n "$manifest" ]; then
             PLATFORM) platform="$value" ;;
             RUNTIME_VARIANT) runtime_variant="$value" ;;
             CALLABLE_HINT) callable_hint="$value" ;;
-            KERNELS) kernels="$value" ;;
-            GOLDEN) golden="$value" ;;
             "") ;;
             *)
                 echo "unknown manifest key: $key" >&2
@@ -79,6 +88,8 @@ if [ -n "$manifest" ]; then
         esac
     done < "$manifest"
 fi
+
+resolve_runner_spec
 
 if [ -z "$platform" ] || [ -z "$kernels" ] || [ -z "$golden" ]; then
     echo "missing required simpler dispatch arguments" >&2

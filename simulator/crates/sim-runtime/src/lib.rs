@@ -369,13 +369,6 @@ struct SimplerProcessRunner {
     adapter_script: PathBuf,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct SimplerRunSpec {
-    platform: &'static str,
-    kernels: &'static str,
-    golden: &'static str,
-}
-
 #[derive(Debug, Clone)]
 struct SimplerDispatchManifest {
     op_id: OpId,
@@ -388,8 +381,6 @@ struct SimplerDispatchManifest {
     platform: String,
     runtime_variant: Option<String>,
     callable_hint: Option<String>,
-    kernels: String,
-    golden: String,
 }
 
 impl SimplerProcessRunner {
@@ -405,8 +396,8 @@ impl SimplerProcessRunner {
         op: &RuntimeOpRecord,
         backend_spec: Option<&DispatchBackendSpec>,
     ) -> Result<(), String> {
-        let spec = simpler_run_spec_for_dispatch(backend_spec)?;
-        let manifest = simpler_dispatch_manifest(op_id, op, backend_spec, spec);
+        validate_simpler_dispatch_spec(backend_spec)?;
+        let manifest = simpler_dispatch_manifest(op_id, op, backend_spec);
         let manifest_path = write_simpler_dispatch_manifest(op_id, &manifest)?;
         let mut command = Command::new(&self.adapter_script);
         if let Ok(python_bin) = std::env::var("SIMPLER_PYTHON") {
@@ -444,7 +435,6 @@ fn simpler_dispatch_manifest(
     op_id: OpId,
     op: &RuntimeOpRecord,
     backend_spec: Option<&DispatchBackendSpec>,
-    spec: SimplerRunSpec,
 ) -> SimplerDispatchManifest {
     SimplerDispatchManifest {
         op_id,
@@ -454,12 +444,12 @@ fn simpler_dispatch_manifest(
         target_node: op.target_node,
         input_segment_count: op.input_segment_count,
         profile: backend_spec.map(|dispatch_spec| backend_profile_name(dispatch_spec.profile).into()),
-        platform: spec.platform.into(),
+        platform: backend_spec
+            .map(|dispatch_spec| dispatch_spec.platform.clone())
+            .unwrap_or_else(|| "a2a3sim".to_string()),
         runtime_variant: backend_spec
             .map(|dispatch_spec| runtime_variant_name(dispatch_spec.runtime_variant).into()),
         callable_hint: backend_spec.and_then(|dispatch_spec| dispatch_spec.callable_hint.clone()),
-        kernels: spec.kernels.into(),
-        golden: spec.golden.into(),
     }
 }
 
@@ -511,12 +501,6 @@ fn write_simpler_dispatch_manifest(
         content.push_str(callable_hint);
         content.push('\n');
     }
-    content.push_str("KERNELS=");
-    content.push_str(&manifest.kernels);
-    content.push('\n');
-    content.push_str("GOLDEN=");
-    content.push_str(&manifest.golden);
-    content.push('\n');
     fs::write(&path, content).map_err(|err| format!("manifest_write_failed:{err}"))?;
     Ok(path)
 }
@@ -536,33 +520,14 @@ fn runtime_variant_name(runtime_variant: DispatchRuntimeVariant) -> &'static str
     }
 }
 
-fn simpler_run_spec_for_dispatch(
+fn validate_simpler_dispatch_spec(
     backend_spec: Option<&DispatchBackendSpec>,
-) -> Result<SimplerRunSpec, String> {
-    let profile = backend_spec.map(|spec| &spec.profile);
+) -> Result<(), String> {
     if let Some(spec) = backend_spec {
         if spec.platform != "a2a3sim" {
             return Err(format!("unsupported_platform:{}", spec.platform));
         }
     }
-
-    let spec = match profile {
-        Some(DispatchBackendProfile::TmrbVector) => SimplerRunSpec {
-            platform: "a2a3sim",
-            kernels: "examples/a2a3/tensormap_and_ringbuffer/vector_example/kernels",
-            golden: "examples/a2a3/tensormap_and_ringbuffer/vector_example/golden.py",
-        },
-        Some(DispatchBackendProfile::HostMatmul) => SimplerRunSpec {
-            platform: "a2a3sim",
-            kernels: "examples/a2a3/host_build_graph/matmul/kernels",
-            golden: "examples/a2a3/host_build_graph/matmul/golden.py",
-        },
-        _ => SimplerRunSpec {
-            platform: "a2a3sim",
-            kernels: "examples/a2a3/host_build_graph/vector_example/kernels",
-            golden: "examples/a2a3/host_build_graph/vector_example/golden.py",
-        },
-    };
 
     if let Some(dispatch_spec) = backend_spec {
         match (&dispatch_spec.profile, &dispatch_spec.runtime_variant) {
@@ -586,7 +551,7 @@ fn simpler_run_spec_for_dispatch(
         }
     }
 
-    Ok(spec)
+    Ok(())
 }
 
 impl LocalRuntimeEngine {
