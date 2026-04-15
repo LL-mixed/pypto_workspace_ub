@@ -26,27 +26,18 @@ resolve_runner_spec() {
             runner_id="tmrb_vector_example"
             callable_name="${callable_hint:-tmrb_vector}"
             argset_kind="tmrb_vector_example"
-            entrypoint="examples/scripts/run_example.py"
-            kernels="examples/a2a3/tensormap_and_ringbuffer/vector_example/kernels"
-            golden="examples/a2a3/tensormap_and_ringbuffer/vector_example/golden.py"
             ;;
         "host_matmul:host_build_graph")
             dispatch_mode="example"
             runner_id="host_matmul_example"
             callable_name="${callable_hint:-host_matmul}"
             argset_kind="host_matmul_example"
-            entrypoint="examples/scripts/run_example.py"
-            kernels="examples/a2a3/host_build_graph/matmul/kernels"
-            golden="examples/a2a3/host_build_graph/matmul/golden.py"
             ;;
         "host_vector:host_build_graph"|":")
             dispatch_mode="example"
             runner_id="host_vector_example"
             callable_name="${callable_hint:-host_vector}"
             argset_kind="host_vector_example"
-            entrypoint="examples/scripts/run_example.py"
-            kernels="examples/a2a3/host_build_graph/vector_example/kernels"
-            golden="examples/a2a3/host_build_graph/vector_example/golden.py"
             ;;
         *)
             echo "unsupported simpler runner spec: profile=${profile} runtime_variant=${runtime_variant}" >&2
@@ -114,7 +105,7 @@ fi
 
 resolve_runner_spec
 
-if [ -z "$platform" ] || [ -z "$kernels" ] || [ -z "$golden" ]; then
+if [ -z "$platform" ] || [ -z "$runner_id" ] || [ -z "$callable_name" ] || [ -z "$argset_kind" ]; then
     echo "missing required simpler dispatch arguments" >&2
     exit 2
 fi
@@ -132,10 +123,7 @@ SIMPLER_DISPATCH_MODE="$dispatch_mode" \
 SIMPLER_DISPATCH_RUNNER_ID="$runner_id" \
 SIMPLER_DISPATCH_CALLABLE_NAME="$callable_name" \
 SIMPLER_DISPATCH_ARGSET_KIND="$argset_kind" \
-SIMPLER_DISPATCH_ENTRYPOINT="$entrypoint" \
 SIMPLER_DISPATCH_PLATFORM="$platform" \
-SIMPLER_DISPATCH_KERNELS="$kernels" \
-SIMPLER_DISPATCH_GOLDEN="$golden" \
 SIMPLER_PYTHON="$python_bin" \
 SIMPLER_PROJECT_ROOT="$simpler_root" \
 exec "$executor_script"
