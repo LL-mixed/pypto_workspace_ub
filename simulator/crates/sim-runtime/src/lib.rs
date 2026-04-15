@@ -328,7 +328,7 @@ pub enum RuntimeOpState {
 pub struct RuntimeOpRecord {
     pub op_id: OpId,
     pub kind: RuntimeOpKind,
-    pub function_name: Option<String>,
+    pub backend_profile: Option<String>,
     pub task: TaskKey,
     pub state: RuntimeOpState,
     pub submitted_at: SimTimestamp,
@@ -376,8 +376,8 @@ impl SimplerProcessRunner {
         }
     }
 
-    fn run_dispatch_example(&self, function_name: Option<&str>) -> Result<(), String> {
-        let (kernels, golden) = simpler_example_for_dispatch(function_name);
+    fn run_dispatch_example(&self, backend_profile: Option<&str>) -> Result<(), String> {
+        let (kernels, golden) = simpler_example_for_dispatch(backend_profile);
         let status = Command::new(&self.python_bin)
             .current_dir(&self.simpler_root)
             .arg("examples/scripts/run_example.py")
@@ -407,13 +407,13 @@ fn default_simpler_root() -> PathBuf {
         .join("simpler")
 }
 
-fn simpler_example_for_dispatch(function_name: Option<&str>) -> (&'static str, &'static str) {
-    match function_name {
-        Some("w3_cache_fill_transform") => (
+fn simpler_example_for_dispatch(backend_profile: Option<&str>) -> (&'static str, &'static str) {
+    match backend_profile {
+        Some("tmrb_vector") => (
             "examples/a2a3/tensormap_and_ringbuffer/vector_example/kernels",
             "examples/a2a3/tensormap_and_ringbuffer/vector_example/golden.py",
         ),
-        Some("w4_rust_llm_minimal_step") => (
+        Some("host_matmul") => (
             "examples/a2a3/host_build_graph/matmul/kernels",
             "examples/a2a3/host_build_graph/matmul/golden.py",
         ),
@@ -475,7 +475,7 @@ impl LocalRuntimeEngine {
         self.inflight.push(RuntimeOpRecord {
             op_id,
             kind: RuntimeOpKind::Dispatch,
-            function_name: Some(req.function.name.clone()),
+            backend_profile: req.backend_profile.clone(),
             task: req.task.clone(),
             state: RuntimeOpState::Queued,
             submitted_at: self.now,
@@ -508,7 +508,7 @@ impl LocalRuntimeEngine {
         self.inflight.push(RuntimeOpRecord {
             op_id,
             kind,
-            function_name: None,
+            backend_profile: None,
             task,
             state: RuntimeOpState::Queued,
             submitted_at: self.now,
@@ -562,7 +562,7 @@ impl LocalRuntimeEngine {
                 let completion = match (backend_mode, op.kind) {
                     (ChipBackendMode::SimplerProcess, RuntimeOpKind::Dispatch) => {
                         let runner = SimplerProcessRunner::from_env();
-                        match runner.run_dispatch_example(op.function_name.as_deref()) {
+                        match runner.run_dispatch_example(op.backend_profile.as_deref()) {
                             Ok(()) => CompletionEvent {
                                 op_id: op.op_id,
                                 task: Some(op.task.clone()),
@@ -1051,6 +1051,7 @@ outputs:
                         name: "decode_step".into(),
                         level: PlLevel::L4,
                     },
+                    backend_profile: None,
                     target_level: PlLevel::L4,
                     target_node: 19,
                     input_segments: vec![SegmentHandle(1)],
@@ -1121,6 +1122,7 @@ outputs:
                         name: "decode_step".into(),
                         level: PlLevel::L4,
                     },
+                    backend_profile: None,
                     target_level: PlLevel::L4,
                     target_node: 19,
                     input_segments: vec![SegmentHandle(1)],
@@ -1157,6 +1159,7 @@ outputs:
                         name: "decode_step".into(),
                         level: PlLevel::L4,
                     },
+                    backend_profile: None,
                     target_level: PlLevel::L4,
                     target_node: 19,
                     input_segments: vec![SegmentHandle(1)],
@@ -1194,6 +1197,7 @@ outputs:
                         name: "decode_step".into(),
                         level: PlLevel::L4,
                     },
+                    backend_profile: None,
                     target_level: PlLevel::L4,
                     target_node: 19,
                     input_segments: vec![SegmentHandle(1)],

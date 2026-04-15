@@ -155,6 +155,7 @@ pub struct MemoryEndpoint {
 pub struct DispatchRequest {
     pub task: TaskKey,
     pub function: FunctionLabel,
+    pub backend_profile: Option<String>,
     pub target_level: PlLevel,
     pub target_node: NodeId,
     pub input_segments: Vec<SegmentHandle>,

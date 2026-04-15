@@ -529,6 +529,7 @@ fn run_dual_node_shmem_mailbox_workload(
                     name: "w1_shmem_mailbox_transform".to_string(),
                     level: PlLevel::L2,
                 },
+                backend_profile: Some("host_vector".to_string()),
                 target_level: PlLevel::L2,
                 target_node: ubpu_b.node_id,
                 input_segments: vec![stage_segment],
@@ -704,6 +705,7 @@ fn run_dual_node_block_compute_workload(
                     name: "w2_block_transform".to_string(),
                     level: PlLevel::L2,
                 },
+                backend_profile: Some("host_vector".to_string()),
                 target_level: PlLevel::L2,
                 target_node: ubpu_a.node_id,
                 input_segments: vec![stage_segment],
@@ -882,6 +884,7 @@ fn run_dual_node_cache_fill_workload(
                     name: "w3_cache_fill_transform".to_string(),
                     level: PlLevel::L2,
                 },
+                backend_profile: Some("tmrb_vector".to_string()),
                 target_level: PlLevel::L2,
                 target_node: ubpu_a.node_id,
                 input_segments: vec![stage_segment],
@@ -1177,6 +1180,11 @@ fn run_chip_backend_minimal_step(
                 name: function_name.to_string(),
                 level: PlLevel::L2,
             },
+            backend_profile: Some(if function_name == "w4_rust_llm_minimal_step" {
+                "host_matmul".to_string()
+            } else {
+                "host_vector".to_string()
+            }),
             target_level: PlLevel::L2,
             target_node: ubpu_node,
             input_segments: vec![stage_segment],
