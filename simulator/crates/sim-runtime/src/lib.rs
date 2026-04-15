@@ -9,8 +9,8 @@ use sim_config::ScenarioConfig;
 use sim_core::{
     BlockHash, BlockPlacement, CompletionEvent, CompletionSource, CompletionStatus, CopyDirection,
     CopyRequest, DispatchBackendProfile, DispatchBackendSpec, DispatchHandle, DispatchRequest,
-    DispatchRuntimeVariant, OpId, PlLevel, RouteDecision, RouteReason, ServiceOpHandle, SimEvent,
-    SimTimestamp, TaskKey, TransferHandle,
+    DispatchRuntimeVariant, NodeId, OpId, PlLevel, RouteDecision, RouteReason,
+    ServiceOpHandle, SimEvent, SimTimestamp, TaskKey, TransferHandle,
 };
 use sim_topology::SimTopology;
 
@@ -332,6 +332,10 @@ pub struct RuntimeOpRecord {
     pub kind: RuntimeOpKind,
     pub backend_spec: Option<DispatchBackendSpec>,
     pub task: TaskKey,
+    pub function_name: Option<String>,
+    pub target_level: Option<PlLevel>,
+    pub target_node: Option<NodeId>,
+    pub input_segment_count: usize,
     pub state: RuntimeOpState,
     pub submitted_at: SimTimestamp,
     pub issued_at: Option<SimTimestamp>,
@@ -374,6 +378,12 @@ struct SimplerRunSpec {
 
 #[derive(Debug, Clone)]
 struct SimplerDispatchManifest {
+    op_id: OpId,
+    task: String,
+    function_name: Option<String>,
+    target_level: Option<String>,
+    target_node: Option<NodeId>,
+    input_segment_count: usize,
     profile: Option<String>,
     platform: String,
     runtime_variant: Option<String>,
@@ -392,10 +402,11 @@ impl SimplerProcessRunner {
     fn run_dispatch_example(
         &self,
         op_id: OpId,
+        op: &RuntimeOpRecord,
         backend_spec: Option<&DispatchBackendSpec>,
     ) -> Result<(), String> {
         let spec = simpler_run_spec_for_dispatch(backend_spec)?;
-        let manifest = simpler_dispatch_manifest(backend_spec, spec);
+        let manifest = simpler_dispatch_manifest(op_id, op, backend_spec, spec);
         let manifest_path = write_simpler_dispatch_manifest(op_id, &manifest)?;
         let mut command = Command::new(&self.adapter_script);
         if let Ok(python_bin) = std::env::var("SIMPLER_PYTHON") {
@@ -430,10 +441,18 @@ fn default_simpler_dispatch_script() -> PathBuf {
 }
 
 fn simpler_dispatch_manifest(
+    op_id: OpId,
+    op: &RuntimeOpRecord,
     backend_spec: Option<&DispatchBackendSpec>,
     spec: SimplerRunSpec,
 ) -> SimplerDispatchManifest {
     SimplerDispatchManifest {
+        op_id,
+        task: op.task.task_id.clone(),
+        function_name: op.function_name.clone(),
+        target_level: op.target_level.map(|level| format!("{level:?}")),
+        target_node: op.target_node,
+        input_segment_count: op.input_segment_count,
         profile: backend_spec.map(|dispatch_spec| backend_profile_name(dispatch_spec.profile).into()),
         platform: spec.platform.into(),
         runtime_variant: backend_spec
@@ -450,6 +469,30 @@ fn write_simpler_dispatch_manifest(
 ) -> Result<PathBuf, String> {
     let path = std::env::temp_dir().join(format!("simpler-dispatch-{op_id}.env"));
     let mut content = String::new();
+    content.push_str("OP_ID=");
+    content.push_str(&manifest.op_id.to_string());
+    content.push('\n');
+    content.push_str("TASK_ID=");
+    content.push_str(&manifest.task);
+    content.push('\n');
+    if let Some(function_name) = manifest.function_name.as_deref() {
+        content.push_str("FUNCTION_NAME=");
+        content.push_str(function_name);
+        content.push('\n');
+    }
+    if let Some(target_level) = manifest.target_level.as_deref() {
+        content.push_str("TARGET_LEVEL=");
+        content.push_str(target_level);
+        content.push('\n');
+    }
+    if let Some(target_node) = manifest.target_node {
+        content.push_str("TARGET_NODE=");
+        content.push_str(&target_node.to_string());
+        content.push('\n');
+    }
+    content.push_str("INPUT_SEGMENT_COUNT=");
+    content.push_str(&manifest.input_segment_count.to_string());
+    content.push('\n');
     if let Some(profile) = manifest.profile.as_deref() {
         content.push_str("PROFILE=");
         content.push_str(profile);
@@ -599,6 +642,10 @@ impl LocalRuntimeEngine {
             kind: RuntimeOpKind::Dispatch,
             backend_spec: req.backend_spec.clone(),
             task: req.task.clone(),
+            function_name: Some(req.function.name.clone()),
+            target_level: Some(req.target_level),
+            target_node: Some(req.target_node),
+            input_segment_count: req.input_segments.len(),
             state: RuntimeOpState::Queued,
             submitted_at: self.now,
             issued_at: None,
@@ -632,6 +679,10 @@ impl LocalRuntimeEngine {
             kind,
             backend_spec: None,
             task,
+            function_name: None,
+            target_level: None,
+            target_node: None,
+            input_segment_count: 0,
             state: RuntimeOpState::Queued,
             submitted_at: self.now,
             issued_at: None,
@@ -684,7 +735,7 @@ impl LocalRuntimeEngine {
                 let completion = match (backend_mode, op.kind) {
                     (ChipBackendMode::SimplerProcess, RuntimeOpKind::Dispatch) => {
                         let runner = SimplerProcessRunner::from_env();
-                        match runner.run_dispatch_example(op.op_id, op.backend_spec.as_ref()) {
+                        match runner.run_dispatch_example(op.op_id, &op, op.backend_spec.as_ref()) {
                             Ok(()) => CompletionEvent {
                                 op_id: op.op_id,
                                 task: Some(op.task.clone()),

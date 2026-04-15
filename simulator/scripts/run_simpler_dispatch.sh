@@ -5,6 +5,12 @@ python_bin="${SIMPLER_PYTHON:-python3}"
 repo_root="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
 simpler_root="${SIMPLER_PROJECT_ROOT:-$repo_root/modules/simpler}"
 
+op_id=""
+task_id=""
+function_name=""
+target_level=""
+target_node=""
+input_segment_count=""
 profile=""
 platform=""
 runtime_variant=""
@@ -54,6 +60,12 @@ if [ -n "$manifest" ]; then
     while IFS='=' read -r key value; do
         case "$key" in
             PROFILE) profile="$value" ;;
+            OP_ID) op_id="$value" ;;
+            TASK_ID) task_id="$value" ;;
+            FUNCTION_NAME) function_name="$value" ;;
+            TARGET_LEVEL) target_level="$value" ;;
+            TARGET_NODE) target_node="$value" ;;
+            INPUT_SEGMENT_COUNT) input_segment_count="$value" ;;
             PLATFORM) platform="$value" ;;
             RUNTIME_VARIANT) runtime_variant="$value" ;;
             CALLABLE_HINT) callable_hint="$value" ;;
@@ -74,6 +86,12 @@ if [ -z "$platform" ] || [ -z "$kernels" ] || [ -z "$golden" ]; then
 fi
 
 cd "$simpler_root"
+SIMPLER_DISPATCH_OP_ID="$op_id" \
+SIMPLER_DISPATCH_TASK_ID="$task_id" \
+SIMPLER_DISPATCH_FUNCTION_NAME="$function_name" \
+SIMPLER_DISPATCH_TARGET_LEVEL="$target_level" \
+SIMPLER_DISPATCH_TARGET_NODE="$target_node" \
+SIMPLER_DISPATCH_INPUT_SEGMENT_COUNT="$input_segment_count" \
 SIMPLER_DISPATCH_PROFILE="$profile" \
 SIMPLER_RUNTIME_VARIANT="$runtime_variant" \
 SIMPLER_CALLABLE_HINT="$callable_hint" \
