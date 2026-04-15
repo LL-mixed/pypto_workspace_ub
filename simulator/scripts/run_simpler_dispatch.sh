@@ -24,6 +24,8 @@ resolve_runner_spec() {
         "tmrb_vector:tensormap_and_ringbuffer")
             dispatch_mode="example"
             runner_id="tmrb_vector_example"
+            callable_name="${callable_hint:-tmrb_vector}"
+            argset_kind="tmrb_vector_example"
             entrypoint="examples/scripts/run_example.py"
             kernels="examples/a2a3/tensormap_and_ringbuffer/vector_example/kernels"
             golden="examples/a2a3/tensormap_and_ringbuffer/vector_example/golden.py"
@@ -31,6 +33,8 @@ resolve_runner_spec() {
         "host_matmul:host_build_graph")
             dispatch_mode="example"
             runner_id="host_matmul_example"
+            callable_name="${callable_hint:-host_matmul}"
+            argset_kind="host_matmul_example"
             entrypoint="examples/scripts/run_example.py"
             kernels="examples/a2a3/host_build_graph/matmul/kernels"
             golden="examples/a2a3/host_build_graph/matmul/golden.py"
@@ -38,6 +42,8 @@ resolve_runner_spec() {
         "host_vector:host_build_graph"|":")
             dispatch_mode="example"
             runner_id="host_vector_example"
+            callable_name="${callable_hint:-host_vector}"
+            argset_kind="host_vector_example"
             entrypoint="examples/scripts/run_example.py"
             kernels="examples/a2a3/host_build_graph/vector_example/kernels"
             golden="examples/a2a3/host_build_graph/vector_example/golden.py"
@@ -124,6 +130,8 @@ SIMPLER_RUNTIME_VARIANT="$runtime_variant" \
 SIMPLER_CALLABLE_HINT="$callable_hint" \
 SIMPLER_DISPATCH_MODE="$dispatch_mode" \
 SIMPLER_DISPATCH_RUNNER_ID="$runner_id" \
+SIMPLER_DISPATCH_CALLABLE_NAME="$callable_name" \
+SIMPLER_DISPATCH_ARGSET_KIND="$argset_kind" \
 SIMPLER_DISPATCH_ENTRYPOINT="$entrypoint" \
 SIMPLER_DISPATCH_PLATFORM="$platform" \
 SIMPLER_DISPATCH_KERNELS="$kernels" \
