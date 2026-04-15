@@ -4,6 +4,7 @@ set -eu
 python_bin="${SIMPLER_PYTHON:-python3}"
 repo_root="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
 simpler_root="${SIMPLER_PROJECT_ROOT:-$repo_root/modules/simpler}"
+executor_script="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/simpler_dispatch_exec.sh"
 
 manifest_version=""
 op_id=""
@@ -21,17 +22,23 @@ manifest=""
 resolve_runner_spec() {
     case "${profile}:${runtime_variant}" in
         "tmrb_vector:tensormap_and_ringbuffer")
+            dispatch_mode="example"
             runner_id="tmrb_vector_example"
+            entrypoint="examples/scripts/run_example.py"
             kernels="examples/a2a3/tensormap_and_ringbuffer/vector_example/kernels"
             golden="examples/a2a3/tensormap_and_ringbuffer/vector_example/golden.py"
             ;;
         "host_matmul:host_build_graph")
+            dispatch_mode="example"
             runner_id="host_matmul_example"
+            entrypoint="examples/scripts/run_example.py"
             kernels="examples/a2a3/host_build_graph/matmul/kernels"
             golden="examples/a2a3/host_build_graph/matmul/golden.py"
             ;;
         "host_vector:host_build_graph"|":")
+            dispatch_mode="example"
             runner_id="host_vector_example"
+            entrypoint="examples/scripts/run_example.py"
             kernels="examples/a2a3/host_build_graph/vector_example/kernels"
             golden="examples/a2a3/host_build_graph/vector_example/golden.py"
             ;;
@@ -106,7 +113,6 @@ if [ -z "$platform" ] || [ -z "$kernels" ] || [ -z "$golden" ]; then
     exit 2
 fi
 
-cd "$simpler_root"
 SIMPLER_DISPATCH_OP_ID="$op_id" \
 SIMPLER_DISPATCH_TASK_ID="$task_id" \
 SIMPLER_DISPATCH_FUNCTION_NAME="$function_name" \
@@ -116,10 +122,12 @@ SIMPLER_DISPATCH_INPUT_SEGMENT_COUNT="$input_segment_count" \
 SIMPLER_DISPATCH_PROFILE="$profile" \
 SIMPLER_RUNTIME_VARIANT="$runtime_variant" \
 SIMPLER_CALLABLE_HINT="$callable_hint" \
+SIMPLER_DISPATCH_MODE="$dispatch_mode" \
 SIMPLER_DISPATCH_RUNNER_ID="$runner_id" \
+SIMPLER_DISPATCH_ENTRYPOINT="$entrypoint" \
+SIMPLER_DISPATCH_PLATFORM="$platform" \
 SIMPLER_DISPATCH_KERNELS="$kernels" \
 SIMPLER_DISPATCH_GOLDEN="$golden" \
-exec "$python_bin" examples/scripts/run_example.py \
-    -k "$kernels" \
-    -g "$golden" \
-    -p "$platform"
+SIMPLER_PYTHON="$python_bin" \
+SIMPLER_PROJECT_ROOT="$simpler_root" \
+exec "$executor_script"
