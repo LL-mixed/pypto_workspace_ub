@@ -364,6 +364,13 @@ struct SimplerProcessRunner {
     simpler_root: PathBuf,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct SimplerRunSpec {
+    platform: &'static str,
+    kernels: &'static str,
+    golden: &'static str,
+}
+
 impl SimplerProcessRunner {
     fn from_env() -> Self {
         let python_bin = std::env::var("SIMPLER_PYTHON").unwrap_or_else(|_| "python3".to_string());
@@ -377,16 +384,16 @@ impl SimplerProcessRunner {
     }
 
     fn run_dispatch_example(&self, backend_profile: Option<&str>) -> Result<(), String> {
-        let (kernels, golden) = simpler_example_for_dispatch(backend_profile);
+        let spec = simpler_run_spec_for_profile(backend_profile);
         let status = Command::new(&self.python_bin)
             .current_dir(&self.simpler_root)
             .arg("examples/scripts/run_example.py")
             .arg("-k")
-            .arg(kernels)
+            .arg(spec.kernels)
             .arg("-g")
-            .arg(golden)
+            .arg(spec.golden)
             .arg("-p")
-            .arg("a2a3sim")
+            .arg(spec.platform)
             .status()
             .map_err(|err| format!("spawn_failed:{err}"))?;
 
@@ -407,20 +414,23 @@ fn default_simpler_root() -> PathBuf {
         .join("simpler")
 }
 
-fn simpler_example_for_dispatch(backend_profile: Option<&str>) -> (&'static str, &'static str) {
+fn simpler_run_spec_for_profile(backend_profile: Option<&str>) -> SimplerRunSpec {
     match backend_profile {
-        Some("tmrb_vector") => (
-            "examples/a2a3/tensormap_and_ringbuffer/vector_example/kernels",
-            "examples/a2a3/tensormap_and_ringbuffer/vector_example/golden.py",
-        ),
-        Some("host_matmul") => (
-            "examples/a2a3/host_build_graph/matmul/kernels",
-            "examples/a2a3/host_build_graph/matmul/golden.py",
-        ),
-        _ => (
-            "examples/a2a3/host_build_graph/vector_example/kernels",
-            "examples/a2a3/host_build_graph/vector_example/golden.py",
-        ),
+        Some("tmrb_vector") => SimplerRunSpec {
+            platform: "a2a3sim",
+            kernels: "examples/a2a3/tensormap_and_ringbuffer/vector_example/kernels",
+            golden: "examples/a2a3/tensormap_and_ringbuffer/vector_example/golden.py",
+        },
+        Some("host_matmul") => SimplerRunSpec {
+            platform: "a2a3sim",
+            kernels: "examples/a2a3/host_build_graph/matmul/kernels",
+            golden: "examples/a2a3/host_build_graph/matmul/golden.py",
+        },
+        _ => SimplerRunSpec {
+            platform: "a2a3sim",
+            kernels: "examples/a2a3/host_build_graph/vector_example/kernels",
+            golden: "examples/a2a3/host_build_graph/vector_example/golden.py",
+        },
     }
 }
 
