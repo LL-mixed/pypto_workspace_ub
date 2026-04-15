@@ -8,8 +8,9 @@ use sim_config::{
 };
 use sim_core::{
     BlockHash, CompletionSource, CompletionStatus, CopyDirection, CopyRequest,
-    DispatchBackendSpec, DispatchRequest, FunctionLabel, HierarchyCoord, IoOpcode, IoSubmitReq,
-    LogicalSystemId, MemoryEndpoint, PlLevel, SegmentHandle, SimError, SimEvent, TaskKey,
+    DispatchBackendProfile, DispatchBackendSpec, DispatchRequest, DispatchRuntimeVariant,
+    FunctionLabel, HierarchyCoord, IoOpcode, IoSubmitReq, LogicalSystemId, MemoryEndpoint,
+    PlLevel, SegmentHandle, SimError, SimEvent, TaskKey,
 };
 use sim_report::{CompletionSourceStats, CompletionStatusStats, EventSummary, WorkloadRunReport};
 use sim_runtime::{
@@ -36,14 +37,14 @@ struct RustLlmProfile {
 }
 
 fn simpler_backend_spec(
-    profile: &str,
-    runtime_variant: &str,
+    profile: DispatchBackendProfile,
+    runtime_variant: DispatchRuntimeVariant,
     callable_hint: Option<&str>,
 ) -> DispatchBackendSpec {
     DispatchBackendSpec {
-        profile: profile.to_string(),
+        profile,
         platform: "a2a3sim".to_string(),
-        runtime_variant: runtime_variant.to_string(),
+        runtime_variant,
         callable_hint: callable_hint.map(str::to_string),
     }
 }
@@ -543,8 +544,8 @@ fn run_dual_node_shmem_mailbox_workload(
                     level: PlLevel::L2,
                 },
                 backend_spec: Some(simpler_backend_spec(
-                    "host_vector",
-                    "host_build_graph",
+                    DispatchBackendProfile::HostVector,
+                    DispatchRuntimeVariant::HostBuildGraph,
                     Some("w1_shmem_mailbox_transform"),
                 )),
                 target_level: PlLevel::L2,
@@ -723,8 +724,8 @@ fn run_dual_node_block_compute_workload(
                     level: PlLevel::L2,
                 },
                 backend_spec: Some(simpler_backend_spec(
-                    "host_vector",
-                    "host_build_graph",
+                    DispatchBackendProfile::HostVector,
+                    DispatchRuntimeVariant::HostBuildGraph,
                     Some("w2_block_transform"),
                 )),
                 target_level: PlLevel::L2,
@@ -906,8 +907,8 @@ fn run_dual_node_cache_fill_workload(
                     level: PlLevel::L2,
                 },
                 backend_spec: Some(simpler_backend_spec(
-                    "tmrb_vector",
-                    "tensormap_and_ringbuffer",
+                    DispatchBackendProfile::TmrbVector,
+                    DispatchRuntimeVariant::TensormapAndRingbuffer,
                     Some("w3_cache_fill_transform"),
                 )),
                 target_level: PlLevel::L2,
@@ -1206,9 +1207,17 @@ fn run_chip_backend_minimal_step(
                 level: PlLevel::L2,
             },
             backend_spec: Some(if function_name == "w4_rust_llm_minimal_step" {
-                simpler_backend_spec("host_matmul", "host_build_graph", Some(function_name))
+                simpler_backend_spec(
+                    DispatchBackendProfile::HostMatmul,
+                    DispatchRuntimeVariant::HostBuildGraph,
+                    Some(function_name),
+                )
             } else {
-                simpler_backend_spec("host_vector", "host_build_graph", Some(function_name))
+                simpler_backend_spec(
+                    DispatchBackendProfile::HostVector,
+                    DispatchRuntimeVariant::HostBuildGraph,
+                    Some(function_name),
+                )
             }),
             target_level: PlLevel::L2,
             target_node: ubpu_node,

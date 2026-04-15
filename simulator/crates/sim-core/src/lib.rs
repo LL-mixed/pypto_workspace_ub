@@ -151,11 +151,24 @@ pub struct MemoryEndpoint {
     pub offset: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DispatchBackendProfile {
+    HostVector,
+    TmrbVector,
+    HostMatmul,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DispatchRuntimeVariant {
+    HostBuildGraph,
+    TensormapAndRingbuffer,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DispatchBackendSpec {
-    pub profile: String,
+    pub profile: DispatchBackendProfile,
     pub platform: String,
-    pub runtime_variant: String,
+    pub runtime_variant: DispatchRuntimeVariant,
     pub callable_hint: Option<String>,
 }
 

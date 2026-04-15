@@ -7,8 +7,9 @@ use std::process::Command;
 use sim_config::ScenarioConfig;
 use sim_core::{
     BlockHash, BlockPlacement, CompletionEvent, CompletionSource, CompletionStatus, CopyDirection,
-    CopyRequest, DispatchBackendSpec, DispatchHandle, DispatchRequest, OpId, PlLevel,
-    RouteDecision, RouteReason, ServiceOpHandle, SimEvent, SimTimestamp, TaskKey, TransferHandle,
+    CopyRequest, DispatchBackendProfile, DispatchBackendSpec, DispatchHandle, DispatchRequest,
+    DispatchRuntimeVariant, OpId, PlLevel, RouteDecision, RouteReason, ServiceOpHandle, SimEvent,
+    SimTimestamp, TaskKey, TransferHandle,
 };
 use sim_topology::SimTopology;
 
@@ -392,9 +393,9 @@ impl SimplerProcessRunner {
         if let Some(dispatch_spec) = backend_spec {
             command
                 .arg("--profile")
-                .arg(dispatch_spec.profile.as_str())
+                .arg(backend_profile_name(dispatch_spec.profile))
                 .arg("--runtime-variant")
-                .arg(dispatch_spec.runtime_variant.as_str());
+                .arg(runtime_variant_name(dispatch_spec.runtime_variant));
             if let Some(callable_hint) = dispatch_spec.callable_hint.as_deref() {
                 command.arg("--callable-hint").arg(callable_hint);
             }
@@ -428,10 +429,25 @@ fn default_simpler_dispatch_script() -> PathBuf {
         .join("run_simpler_dispatch.sh")
 }
 
+fn backend_profile_name(profile: DispatchBackendProfile) -> &'static str {
+    match profile {
+        DispatchBackendProfile::HostVector => "host_vector",
+        DispatchBackendProfile::TmrbVector => "tmrb_vector",
+        DispatchBackendProfile::HostMatmul => "host_matmul",
+    }
+}
+
+fn runtime_variant_name(runtime_variant: DispatchRuntimeVariant) -> &'static str {
+    match runtime_variant {
+        DispatchRuntimeVariant::HostBuildGraph => "host_build_graph",
+        DispatchRuntimeVariant::TensormapAndRingbuffer => "tensormap_and_ringbuffer",
+    }
+}
+
 fn simpler_run_spec_for_dispatch(
     backend_spec: Option<&DispatchBackendSpec>,
 ) -> Result<SimplerRunSpec, String> {
-    let profile = backend_spec.map(|spec| spec.profile.as_str());
+    let profile = backend_spec.map(|spec| &spec.profile);
     if let Some(spec) = backend_spec {
         if spec.platform != "a2a3sim" {
             return Err(format!("unsupported_platform:{}", spec.platform));
@@ -439,12 +455,12 @@ fn simpler_run_spec_for_dispatch(
     }
 
     let spec = match profile {
-        Some("tmrb_vector") => SimplerRunSpec {
+        Some(DispatchBackendProfile::TmrbVector) => SimplerRunSpec {
             platform: "a2a3sim",
             kernels: "examples/a2a3/tensormap_and_ringbuffer/vector_example/kernels",
             golden: "examples/a2a3/tensormap_and_ringbuffer/vector_example/golden.py",
         },
-        Some("host_matmul") => SimplerRunSpec {
+        Some(DispatchBackendProfile::HostMatmul) => SimplerRunSpec {
             platform: "a2a3sim",
             kernels: "examples/a2a3/host_build_graph/matmul/kernels",
             golden: "examples/a2a3/host_build_graph/matmul/golden.py",
@@ -457,13 +473,22 @@ fn simpler_run_spec_for_dispatch(
     };
 
     if let Some(dispatch_spec) = backend_spec {
-        match (dispatch_spec.profile.as_str(), dispatch_spec.runtime_variant.as_str()) {
-            ("tmrb_vector", "tensormap_and_ringbuffer")
-            | ("host_matmul", "host_build_graph")
-            | ("host_vector", "host_build_graph") => {}
+        match (&dispatch_spec.profile, &dispatch_spec.runtime_variant) {
+            (
+                DispatchBackendProfile::TmrbVector,
+                DispatchRuntimeVariant::TensormapAndRingbuffer,
+            )
+            | (
+                DispatchBackendProfile::HostMatmul,
+                DispatchRuntimeVariant::HostBuildGraph,
+            )
+            | (
+                DispatchBackendProfile::HostVector,
+                DispatchRuntimeVariant::HostBuildGraph,
+            ) => {}
             (profile, runtime_variant) => {
                 return Err(format!(
-                    "unsupported_runtime_variant:{profile}:{runtime_variant}"
+                    "unsupported_runtime_variant:{profile:?}:{runtime_variant:?}"
                 ));
             }
         }
