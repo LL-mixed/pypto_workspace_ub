@@ -35,7 +35,7 @@ pypto:
   allow_levels: [CHIP, HOST, CLUSTER_0]
   simpler_boundary:
     enabled: true
-    chip_backend_mode: local_runtime
+    chip_backend_mode: simpler_process
     dispatch_latency_us: 15
   scope_runtime:
     enable_multi_layer_ring: true
