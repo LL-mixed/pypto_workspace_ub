@@ -1,6 +1,7 @@
 //! Runtime traits and orchestration glue.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -371,6 +372,16 @@ struct SimplerRunSpec {
     golden: &'static str,
 }
 
+#[derive(Debug, Clone)]
+struct SimplerDispatchManifest {
+    profile: Option<String>,
+    platform: String,
+    runtime_variant: Option<String>,
+    callable_hint: Option<String>,
+    kernels: String,
+    golden: String,
+}
+
 impl SimplerProcessRunner {
     fn from_env() -> Self {
         Self {
@@ -380,9 +391,12 @@ impl SimplerProcessRunner {
 
     fn run_dispatch_example(
         &self,
+        op_id: OpId,
         backend_spec: Option<&DispatchBackendSpec>,
     ) -> Result<(), String> {
         let spec = simpler_run_spec_for_dispatch(backend_spec)?;
+        let manifest = simpler_dispatch_manifest(backend_spec, spec);
+        let manifest_path = write_simpler_dispatch_manifest(op_id, &manifest)?;
         let mut command = Command::new(&self.adapter_script);
         if let Ok(python_bin) = std::env::var("SIMPLER_PYTHON") {
             command.env("SIMPLER_PYTHON", python_bin);
@@ -390,26 +404,12 @@ impl SimplerProcessRunner {
         if let Ok(simpler_root) = std::env::var("SIMPLER_PROJECT_ROOT") {
             command.env("SIMPLER_PROJECT_ROOT", simpler_root);
         }
-        if let Some(dispatch_spec) = backend_spec {
-            command
-                .arg("--profile")
-                .arg(backend_profile_name(dispatch_spec.profile))
-                .arg("--runtime-variant")
-                .arg(runtime_variant_name(dispatch_spec.runtime_variant));
-            if let Some(callable_hint) = dispatch_spec.callable_hint.as_deref() {
-                command.arg("--callable-hint").arg(callable_hint);
-            }
-        }
-
         let status = command
-            .arg("--platform")
-            .arg(spec.platform)
-            .arg("--kernels")
-            .arg(spec.kernels)
-            .arg("--golden")
-            .arg(spec.golden)
+            .arg("--manifest")
+            .arg(&manifest_path)
             .status()
             .map_err(|err| format!("spawn_failed:{err}"))?;
+        let _ = fs::remove_file(&manifest_path);
 
         if status.success() {
             Ok(())
@@ -427,6 +427,55 @@ fn default_simpler_dispatch_script() -> PathBuf {
         .join("simulator")
         .join("scripts")
         .join("run_simpler_dispatch.sh")
+}
+
+fn simpler_dispatch_manifest(
+    backend_spec: Option<&DispatchBackendSpec>,
+    spec: SimplerRunSpec,
+) -> SimplerDispatchManifest {
+    SimplerDispatchManifest {
+        profile: backend_spec.map(|dispatch_spec| backend_profile_name(dispatch_spec.profile).into()),
+        platform: spec.platform.into(),
+        runtime_variant: backend_spec
+            .map(|dispatch_spec| runtime_variant_name(dispatch_spec.runtime_variant).into()),
+        callable_hint: backend_spec.and_then(|dispatch_spec| dispatch_spec.callable_hint.clone()),
+        kernels: spec.kernels.into(),
+        golden: spec.golden.into(),
+    }
+}
+
+fn write_simpler_dispatch_manifest(
+    op_id: OpId,
+    manifest: &SimplerDispatchManifest,
+) -> Result<PathBuf, String> {
+    let path = std::env::temp_dir().join(format!("simpler-dispatch-{op_id}.env"));
+    let mut content = String::new();
+    if let Some(profile) = manifest.profile.as_deref() {
+        content.push_str("PROFILE=");
+        content.push_str(profile);
+        content.push('\n');
+    }
+    content.push_str("PLATFORM=");
+    content.push_str(&manifest.platform);
+    content.push('\n');
+    if let Some(runtime_variant) = manifest.runtime_variant.as_deref() {
+        content.push_str("RUNTIME_VARIANT=");
+        content.push_str(runtime_variant);
+        content.push('\n');
+    }
+    if let Some(callable_hint) = manifest.callable_hint.as_deref() {
+        content.push_str("CALLABLE_HINT=");
+        content.push_str(callable_hint);
+        content.push('\n');
+    }
+    content.push_str("KERNELS=");
+    content.push_str(&manifest.kernels);
+    content.push('\n');
+    content.push_str("GOLDEN=");
+    content.push_str(&manifest.golden);
+    content.push('\n');
+    fs::write(&path, content).map_err(|err| format!("manifest_write_failed:{err}"))?;
+    Ok(path)
 }
 
 fn backend_profile_name(profile: DispatchBackendProfile) -> &'static str {
@@ -635,7 +684,7 @@ impl LocalRuntimeEngine {
                 let completion = match (backend_mode, op.kind) {
                     (ChipBackendMode::SimplerProcess, RuntimeOpKind::Dispatch) => {
                         let runner = SimplerProcessRunner::from_env();
-                        match runner.run_dispatch_example(op.backend_spec.as_ref()) {
+                        match runner.run_dispatch_example(op.op_id, op.backend_spec.as_ref()) {
                             Ok(()) => CompletionEvent {
                                 op_id: op.op_id,
                                 task: Some(op.task.clone()),
