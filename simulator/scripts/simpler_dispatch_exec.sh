@@ -43,7 +43,14 @@ run_example_execution() {
         echo "missing simpler example execution arguments" >&2
         exit 2
     fi
+    if [ -z "$runner_id" ] || [ -z "$callable_name" ] || [ -z "$argset_kind" ]; then
+        echo "missing simpler execution context" >&2
+        exit 2
+    fi
     SIMPLER_EXECUTION_MODE="$execution_mode" \
+    SIMPLER_EXECUTION_RUNNER_ID="$runner_id" \
+    SIMPLER_EXECUTION_CALLABLE_NAME="$callable_name" \
+    SIMPLER_EXECUTION_ARGSET_KIND="$argset_kind" \
     SIMPLER_EXECUTION_ENTRYPOINT="$execution_entrypoint" \
     SIMPLER_EXECUTION_KERNELS="$execution_kernels" \
     SIMPLER_EXECUTION_GOLDEN="$execution_golden" \
