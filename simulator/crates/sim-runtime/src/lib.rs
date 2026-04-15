@@ -360,8 +360,7 @@ enum ChipBackendMode {
 
 #[derive(Debug, Clone)]
 struct SimplerProcessRunner {
-    python_bin: String,
-    simpler_root: PathBuf,
+    adapter_script: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -373,13 +372,8 @@ struct SimplerRunSpec {
 
 impl SimplerProcessRunner {
     fn from_env() -> Self {
-        let python_bin = std::env::var("SIMPLER_PYTHON").unwrap_or_else(|_| "python3".to_string());
-        let simpler_root = std::env::var("SIMPLER_PROJECT_ROOT")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| default_simpler_root());
         Self {
-            python_bin,
-            simpler_root,
+            adapter_script: default_simpler_dispatch_script(),
         }
     }
 
@@ -388,15 +382,31 @@ impl SimplerProcessRunner {
         backend_spec: Option<&DispatchBackendSpec>,
     ) -> Result<(), String> {
         let spec = simpler_run_spec_for_dispatch(backend_spec)?;
-        let status = Command::new(&self.python_bin)
-            .current_dir(&self.simpler_root)
-            .arg("examples/scripts/run_example.py")
-            .arg("-k")
-            .arg(spec.kernels)
-            .arg("-g")
-            .arg(spec.golden)
-            .arg("-p")
+        let mut command = Command::new(&self.adapter_script);
+        if let Ok(python_bin) = std::env::var("SIMPLER_PYTHON") {
+            command.env("SIMPLER_PYTHON", python_bin);
+        }
+        if let Ok(simpler_root) = std::env::var("SIMPLER_PROJECT_ROOT") {
+            command.env("SIMPLER_PROJECT_ROOT", simpler_root);
+        }
+        if let Some(dispatch_spec) = backend_spec {
+            command
+                .arg("--profile")
+                .arg(dispatch_spec.profile.as_str())
+                .arg("--runtime-variant")
+                .arg(dispatch_spec.runtime_variant.as_str());
+            if let Some(callable_hint) = dispatch_spec.callable_hint.as_deref() {
+                command.arg("--callable-hint").arg(callable_hint);
+            }
+        }
+
+        let status = command
+            .arg("--platform")
             .arg(spec.platform)
+            .arg("--kernels")
+            .arg(spec.kernels)
+            .arg("--golden")
+            .arg(spec.golden)
             .status()
             .map_err(|err| format!("spawn_failed:{err}"))?;
 
@@ -408,13 +418,14 @@ impl SimplerProcessRunner {
     }
 }
 
-fn default_simpler_root() -> PathBuf {
+fn default_simpler_dispatch_script() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(3)
         .unwrap_or_else(|| Path::new("."))
-        .join("modules")
-        .join("simpler")
+        .join("simulator")
+        .join("scripts")
+        .join("run_simpler_dispatch.sh")
 }
 
 fn simpler_run_spec_for_dispatch(
