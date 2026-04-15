@@ -152,10 +152,18 @@ pub struct MemoryEndpoint {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DispatchBackendSpec {
+    pub profile: String,
+    pub platform: String,
+    pub runtime_variant: String,
+    pub callable_hint: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DispatchRequest {
     pub task: TaskKey,
     pub function: FunctionLabel,
-    pub backend_profile: Option<String>,
+    pub backend_spec: Option<DispatchBackendSpec>,
     pub target_level: PlLevel,
     pub target_node: NodeId,
     pub input_segments: Vec<SegmentHandle>,

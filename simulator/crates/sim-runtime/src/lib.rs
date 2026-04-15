@@ -7,8 +7,8 @@ use std::process::Command;
 use sim_config::ScenarioConfig;
 use sim_core::{
     BlockHash, BlockPlacement, CompletionEvent, CompletionSource, CompletionStatus, CopyDirection,
-    CopyRequest, DispatchHandle, DispatchRequest, OpId, PlLevel, RouteDecision, RouteReason,
-    ServiceOpHandle, SimEvent, SimTimestamp, TaskKey, TransferHandle,
+    CopyRequest, DispatchBackendSpec, DispatchHandle, DispatchRequest, OpId, PlLevel,
+    RouteDecision, RouteReason, ServiceOpHandle, SimEvent, SimTimestamp, TaskKey, TransferHandle,
 };
 use sim_topology::SimTopology;
 
@@ -328,7 +328,7 @@ pub enum RuntimeOpState {
 pub struct RuntimeOpRecord {
     pub op_id: OpId,
     pub kind: RuntimeOpKind,
-    pub backend_profile: Option<String>,
+    pub backend_spec: Option<DispatchBackendSpec>,
     pub task: TaskKey,
     pub state: RuntimeOpState,
     pub submitted_at: SimTimestamp,
@@ -383,8 +383,11 @@ impl SimplerProcessRunner {
         }
     }
 
-    fn run_dispatch_example(&self, backend_profile: Option<&str>) -> Result<(), String> {
-        let spec = simpler_run_spec_for_profile(backend_profile);
+    fn run_dispatch_example(
+        &self,
+        backend_spec: Option<&DispatchBackendSpec>,
+    ) -> Result<(), String> {
+        let spec = simpler_run_spec_for_dispatch(backend_spec)?;
         let status = Command::new(&self.python_bin)
             .current_dir(&self.simpler_root)
             .arg("examples/scripts/run_example.py")
@@ -414,8 +417,17 @@ fn default_simpler_root() -> PathBuf {
         .join("simpler")
 }
 
-fn simpler_run_spec_for_profile(backend_profile: Option<&str>) -> SimplerRunSpec {
-    match backend_profile {
+fn simpler_run_spec_for_dispatch(
+    backend_spec: Option<&DispatchBackendSpec>,
+) -> Result<SimplerRunSpec, String> {
+    let profile = backend_spec.map(|spec| spec.profile.as_str());
+    if let Some(spec) = backend_spec {
+        if spec.platform != "a2a3sim" {
+            return Err(format!("unsupported_platform:{}", spec.platform));
+        }
+    }
+
+    let spec = match profile {
         Some("tmrb_vector") => SimplerRunSpec {
             platform: "a2a3sim",
             kernels: "examples/a2a3/tensormap_and_ringbuffer/vector_example/kernels",
@@ -431,7 +443,22 @@ fn simpler_run_spec_for_profile(backend_profile: Option<&str>) -> SimplerRunSpec
             kernels: "examples/a2a3/host_build_graph/vector_example/kernels",
             golden: "examples/a2a3/host_build_graph/vector_example/golden.py",
         },
+    };
+
+    if let Some(dispatch_spec) = backend_spec {
+        match (dispatch_spec.profile.as_str(), dispatch_spec.runtime_variant.as_str()) {
+            ("tmrb_vector", "tensormap_and_ringbuffer")
+            | ("host_matmul", "host_build_graph")
+            | ("host_vector", "host_build_graph") => {}
+            (profile, runtime_variant) => {
+                return Err(format!(
+                    "unsupported_runtime_variant:{profile}:{runtime_variant}"
+                ));
+            }
+        }
     }
+
+    Ok(spec)
 }
 
 impl LocalRuntimeEngine {
@@ -485,7 +512,7 @@ impl LocalRuntimeEngine {
         self.inflight.push(RuntimeOpRecord {
             op_id,
             kind: RuntimeOpKind::Dispatch,
-            backend_profile: req.backend_profile.clone(),
+            backend_spec: req.backend_spec.clone(),
             task: req.task.clone(),
             state: RuntimeOpState::Queued,
             submitted_at: self.now,
@@ -518,7 +545,7 @@ impl LocalRuntimeEngine {
         self.inflight.push(RuntimeOpRecord {
             op_id,
             kind,
-            backend_profile: None,
+            backend_spec: None,
             task,
             state: RuntimeOpState::Queued,
             submitted_at: self.now,
@@ -572,7 +599,7 @@ impl LocalRuntimeEngine {
                 let completion = match (backend_mode, op.kind) {
                     (ChipBackendMode::SimplerProcess, RuntimeOpKind::Dispatch) => {
                         let runner = SimplerProcessRunner::from_env();
-                        match runner.run_dispatch_example(op.backend_profile.as_deref()) {
+                        match runner.run_dispatch_example(op.backend_spec.as_ref()) {
                             Ok(()) => CompletionEvent {
                                 op_id: op.op_id,
                                 task: Some(op.task.clone()),
@@ -1061,7 +1088,7 @@ outputs:
                         name: "decode_step".into(),
                         level: PlLevel::L4,
                     },
-                    backend_profile: None,
+                    backend_spec: None,
                     target_level: PlLevel::L4,
                     target_node: 19,
                     input_segments: vec![SegmentHandle(1)],
@@ -1132,7 +1159,7 @@ outputs:
                         name: "decode_step".into(),
                         level: PlLevel::L4,
                     },
-                    backend_profile: None,
+                    backend_spec: None,
                     target_level: PlLevel::L4,
                     target_node: 19,
                     input_segments: vec![SegmentHandle(1)],
@@ -1169,7 +1196,7 @@ outputs:
                         name: "decode_step".into(),
                         level: PlLevel::L4,
                     },
-                    backend_profile: None,
+                    backend_spec: None,
                     target_level: PlLevel::L4,
                     target_node: 19,
                     input_segments: vec![SegmentHandle(1)],
@@ -1207,7 +1234,7 @@ outputs:
                         name: "decode_step".into(),
                         level: PlLevel::L4,
                     },
-                    backend_profile: None,
+                    backend_spec: None,
                     target_level: PlLevel::L4,
                     target_node: 19,
                     input_segments: vec![SegmentHandle(1)],
