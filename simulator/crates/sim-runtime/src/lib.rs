@@ -1,6 +1,8 @@
 //! Runtime traits and orchestration glue.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use sim_config::ScenarioConfig;
 use sim_core::{
@@ -339,6 +341,7 @@ pub struct RuntimeOpRecord {
 pub struct LocalRuntimeEngine {
     now: SimTimestamp,
     next_op_id: OpId,
+    backend_mode: ChipBackendMode,
     dispatch_latency_us: SimTimestamp,
     copy_latency_us: SimTimestamp,
     timeout_us: SimTimestamp,
@@ -348,15 +351,74 @@ pub struct LocalRuntimeEngine {
     completed: VecDeque<CompletionEvent>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChipBackendMode {
+    LocalRuntime,
+    SimplerProcess,
+}
+
+#[derive(Debug, Clone)]
+struct SimplerProcessRunner {
+    python_bin: String,
+    simpler_root: PathBuf,
+}
+
+impl SimplerProcessRunner {
+    fn from_env() -> Self {
+        let python_bin = std::env::var("SIMPLER_PYTHON").unwrap_or_else(|_| "python3".to_string());
+        let simpler_root = std::env::var("SIMPLER_PROJECT_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| default_simpler_root());
+        Self {
+            python_bin,
+            simpler_root,
+        }
+    }
+
+    fn run_minimal_example(&self) -> Result<(), String> {
+        let status = Command::new(&self.python_bin)
+            .current_dir(&self.simpler_root)
+            .arg("examples/scripts/run_example.py")
+            .arg("-k")
+            .arg("examples/a2a3/host_build_graph/vector_example/kernels")
+            .arg("-g")
+            .arg("examples/a2a3/host_build_graph/vector_example/golden.py")
+            .arg("-p")
+            .arg("a2a3sim")
+            .status()
+            .map_err(|err| format!("spawn_failed:{err}"))?;
+
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("runner_exit:{status}"))
+        }
+    }
+}
+
+fn default_simpler_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .unwrap_or_else(|| Path::new("."))
+        .join("modules")
+        .join("simpler")
+}
+
 impl LocalRuntimeEngine {
     pub fn from_config(config: &ScenarioConfig) -> Self {
-        Self::with_policy(
+        let mut engine = Self::with_policy(
             config.pypto.simpler_boundary.dispatch_latency_us.unwrap_or(1),
             config.levels.l3_host_tier.fetch_latency_us.unwrap_or(1),
             config.levels.l4_domain_tier.fetch_latency_us.unwrap_or(80),
             (config.topology.hosts * config.topology.ubpus_per_host) as usize,
             1,
-        )
+        );
+        engine.backend_mode = match config.pypto.simpler_boundary.chip_backend_mode.as_str() {
+            "simpler_process" => ChipBackendMode::SimplerProcess,
+            _ => ChipBackendMode::LocalRuntime,
+        };
+        engine
     }
 
     pub fn with_policy(
@@ -369,6 +431,7 @@ impl LocalRuntimeEngine {
         Self {
             now: 0,
             next_op_id: 0,
+            backend_mode: ChipBackendMode::LocalRuntime,
             dispatch_latency_us,
             copy_latency_us,
             timeout_us,
@@ -447,6 +510,7 @@ impl LocalRuntimeEngine {
 
     pub fn advance_to(&mut self, now: SimTimestamp, sink: &mut dyn EventSink) {
         self.now = now;
+        let backend_mode = self.backend_mode;
         let dispatch_latency_us = self.dispatch_latency_us;
         let copy_latency_us = self.copy_latency_us;
         let timeout_us = self.timeout_us;
@@ -474,13 +538,46 @@ impl LocalRuntimeEngine {
 
         for op in &mut self.inflight {
             if op.state == RuntimeOpState::Issued && op.ready_at <= now {
-                op.state = RuntimeOpState::Completed;
-                let completion = CompletionEvent {
-                    op_id: op.op_id,
-                    task: Some(op.task.clone()),
-                    source: CompletionSource::ChipBackend,
-                    status: CompletionStatus::Success,
-                    finished_at: op.ready_at,
+                let completion = match (backend_mode, op.kind) {
+                    (ChipBackendMode::SimplerProcess, RuntimeOpKind::Dispatch) => {
+                        let runner = SimplerProcessRunner::from_env();
+                        match runner.run_minimal_example() {
+                            Ok(()) => CompletionEvent {
+                                op_id: op.op_id,
+                                task: Some(op.task.clone()),
+                                source: CompletionSource::ChipBackend,
+                                status: CompletionStatus::Success,
+                                finished_at: op.ready_at,
+                            },
+                            Err(code) => {
+                                sink.emit(SimEvent::RuntimeFailed {
+                                    at: now,
+                                    op_id: op.op_id,
+                                    reason: code.clone(),
+                                });
+                                CompletionEvent {
+                                    op_id: op.op_id,
+                                    task: Some(op.task.clone()),
+                                    source: CompletionSource::ChipBackend,
+                                    status: CompletionStatus::FatalFailure { code },
+                                    finished_at: now,
+                                }
+                            }
+                        }
+                    }
+                    _ => CompletionEvent {
+                        op_id: op.op_id,
+                        task: Some(op.task.clone()),
+                        source: CompletionSource::ChipBackend,
+                        status: CompletionStatus::Success,
+                        finished_at: op.ready_at,
+                    },
+                };
+                op.state = match &completion.status {
+                    CompletionStatus::Success => RuntimeOpState::Completed,
+                    CompletionStatus::RetryableFailure { .. } | CompletionStatus::FatalFailure { .. } => {
+                        RuntimeOpState::Failed
+                    }
                 };
                 sink.emit(SimEvent::CompletionObserved {
                     at: completion.finished_at,
