@@ -10,3 +10,5 @@ Current validation entry points:
   - current eight-node full-mesh matrix status for `chat`, `rpc`, `rdma`, and `obmm-pool`
 - [sim_ub_eight_node_full_mesh_design.md](/Volumes/repos/pypto_workspace/simulator/docs/sim_ub_eight_node_full_mesh_design.md)
   - eight-node scale-up design notes, including configurable `port_num` and FM-owned `EID/CNA` constraints
+- [ub_sim_sync_boundary.md](/Volumes/repos/pypto_workspace/simulator/docs/ub_sim_sync_boundary.md)
+  - sync boundary from main repo to `ub_sim.git`, and the rule that rebuild-after-sync is owned by `ub_sim.git` validation/tooling
