@@ -11,28 +11,46 @@ callable_name="${SIMPLER_DISPATCH_CALLABLE_NAME:-}"
 argset_kind="${SIMPLER_DISPATCH_ARGSET_KIND:-}"
 platform="${SIMPLER_DISPATCH_PLATFORM:-}"
 
-resolve_execution_spec() {
+build_execution_spec() {
     case "${runner_id}:${callable_name}:${argset_kind}" in
         "tmrb_vector_example:"*":tmrb_vector_example")
-            entrypoint="examples/scripts/run_example.py"
-            kernels="examples/a2a3/tensormap_and_ringbuffer/vector_example/kernels"
-            golden="examples/a2a3/tensormap_and_ringbuffer/vector_example/golden.py"
+            execution_mode="example"
+            execution_entrypoint="examples/scripts/run_example.py"
+            execution_kernels="examples/a2a3/tensormap_and_ringbuffer/vector_example/kernels"
+            execution_golden="examples/a2a3/tensormap_and_ringbuffer/vector_example/golden.py"
             ;;
         "host_matmul_example:"*":host_matmul_example")
-            entrypoint="examples/scripts/run_example.py"
-            kernels="examples/a2a3/host_build_graph/matmul/kernels"
-            golden="examples/a2a3/host_build_graph/matmul/golden.py"
+            execution_mode="example"
+            execution_entrypoint="examples/scripts/run_example.py"
+            execution_kernels="examples/a2a3/host_build_graph/matmul/kernels"
+            execution_golden="examples/a2a3/host_build_graph/matmul/golden.py"
             ;;
         "host_vector_example:"*":host_vector_example")
-            entrypoint="examples/scripts/run_example.py"
-            kernels="examples/a2a3/host_build_graph/vector_example/kernels"
-            golden="examples/a2a3/host_build_graph/vector_example/golden.py"
+            execution_mode="example"
+            execution_entrypoint="examples/scripts/run_example.py"
+            execution_kernels="examples/a2a3/host_build_graph/vector_example/kernels"
+            execution_golden="examples/a2a3/host_build_graph/vector_example/golden.py"
             ;;
         *)
             echo "unsupported simpler execution spec: runner_id=${runner_id} callable_name=${callable_name} argset_kind=${argset_kind}" >&2
             exit 2
             ;;
     esac
+}
+
+run_example_execution() {
+    if [ -z "$platform" ] || [ -z "$execution_entrypoint" ] || [ -z "$execution_kernels" ] || [ -z "$execution_golden" ]; then
+        echo "missing simpler example execution arguments" >&2
+        exit 2
+    fi
+    SIMPLER_EXECUTION_MODE="$execution_mode" \
+    SIMPLER_EXECUTION_ENTRYPOINT="$execution_entrypoint" \
+    SIMPLER_EXECUTION_KERNELS="$execution_kernels" \
+    SIMPLER_EXECUTION_GOLDEN="$execution_golden" \
+    exec "$python_bin" "$execution_entrypoint" \
+        -k "$execution_kernels" \
+        -g "$execution_golden" \
+        -p "$platform"
 }
 
 if [ -z "$dispatch_mode" ] || [ -z "$runner_id" ]; then
@@ -48,15 +66,8 @@ case "$dispatch_mode" in
             echo "missing simpler callable resolution for example execution" >&2
             exit 2
         fi
-        resolve_execution_spec
-        if [ -z "$platform" ] || [ -z "$entrypoint" ] || [ -z "$kernels" ] || [ -z "$golden" ]; then
-            echo "missing simpler example execution arguments" >&2
-            exit 2
-        fi
-        exec "$python_bin" "$entrypoint" \
-            -k "$kernels" \
-            -g "$golden" \
-            -p "$platform"
+        build_execution_spec
+        run_example_execution
         ;;
     *)
         echo "unsupported simpler dispatch mode: $dispatch_mode" >&2
